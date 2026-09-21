@@ -1,15 +1,21 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useState } from "react";
 import {
   definePluginApp,
-  experimental_useSidebarThreads,
   useBbNavigate,
-  useRealtime,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { Capture, Collection, PokemonSettings, rpcContract } from "./server";
-import { starters, type StarterId } from "./pokemon";
+import type { PokemonSettings, rpcContract } from "./server";
+import { starters } from "./pokemon";
 import { Button } from "@/components/ui/button";
+import { CaptureCard } from "./components/pokemon/capture-card";
+import { FloatingCompanion, ThreadCompanion } from "./components/pokemon/companions";
+import { CollectionFilterControls, defaultCollectionFilters, filterCaptures } from "./components/pokemon/collection-filters";
+import { CollectionPagination, paginateCaptures } from "./components/pokemon/collection-pagination";
+import { Modal } from "./components/pokemon/modal";
+import { PokeballIcon } from "./components/pokemon/pokeball-icon";
+import { StarterSetup } from "./components/pokemon/starter-setup";
+import { useCollection } from "./hooks/use-collection";
+import { shinySpriteUrl, spriteUrl } from "./lib/pokemon/media";
 import "./app.css";
 
 const milestoneLabels = {
@@ -18,259 +24,6 @@ const milestoneLabels = {
   pr_closed: "Close a pull request",
   ticket_completed: "Complete a ticket",
 } as const;
-
-function PokeballIcon({ className }: { className?: string }) {
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <circle cx="12" cy="12" r="9" />
-    <path d="M3 12h6m6 0h6" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>;
-}
-
-function Modal({ children, onClose, wide = false }: { children: ReactNode; onClose: () => void; wide?: boolean }) {
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-  return (
-    <div className="fixed inset-0 z-[100] grid place-items-center bg-black/40 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className={`relative max-h-[86vh] w-full overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-2xl ${wide ? "max-w-2xl" : "max-w-lg"}`} role="dialog" aria-modal="true">
-        {children}
-      </section>
-    </div>
-  );
-}
-
-function useCollection() {
-  const rpc = useRpc<typeof rpcContract>();
-  const [collection, setCollection] = useState<Collection | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(() => {
-    rpc.call("collection_get").then(setCollection, (cause) => {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    });
-  }, [rpc]);
-  useEffect(load, [load]);
-  useRealtime("collection-changed", load);
-  const selectStarter = async (starter: StarterId) => {
-    try {
-      setCollection(await rpc.call("starter_select", { starterId: starter }));
-      setError(null);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-  const resetCollection = async () => {
-    try {
-      setCollection(await rpc.call("collection_reset"));
-      setError(null);
-      return true;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      return false;
-    }
-  };
-  const addDemoReward = async (kind: "egg" | "shiny") => {
-    try {
-      setCollection(await rpc.call("demo_reward_add", { kind }));
-      setError(null);
-      return true;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      return false;
-    }
-  };
-  return { collection, error, selectStarter, resetCollection, addDemoReward };
-}
-
-const spritePatterns: Array<Array<[number, number, number, number]>> = [
-  [
-    [10, 2, 12, 5], [6, 6, 20, 5], [4, 11, 24, 11], [7, 22, 5, 6],
-    [20, 22, 5, 6], [2, 14, 5, 6], [25, 14, 5, 6],
-  ],
-  [
-    [10, 3, 12, 7], [7, 9, 18, 13], [8, 21, 6, 7], [19, 21, 6, 7],
-    [24, 17, 5, 5], [27, 12, 3, 5],
-  ],
-  [
-    [9, 3, 14, 7], [6, 9, 20, 14], [8, 22, 6, 6], [19, 22, 6, 6],
-    [2, 12, 6, 5], [25, 12, 5, 5],
-  ],
-];
-
-function spriteUrl(number: number): string {
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${number}.png`;
-}
-
-function shinySpriteUrl(number: number): string {
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/${number}.png`;
-}
-
-function animatedSpriteUrl(number: number): string | null {
-  if (number > 649) return null;
-  return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-v/black-white/animated/${number}.gif`;
-}
-
-let activeCry: HTMLAudioElement | null = null;
-
-function playPokemonCry(url: string) {
-  activeCry?.pause();
-  const audio = new Audio(url);
-  activeCry = audio;
-  audio.addEventListener("ended", () => {
-    if (activeCry === audio) activeCry = null;
-  }, { once: true });
-  void audio.play().catch(() => {
-    if (activeCry === audio) activeCry = null;
-  });
-}
-
-function PixelStarter({ id, running = false, size = "large" }: { id: StarterId; running?: boolean; size?: "small" | "large" }) {
-  const starter = starters.find((candidate) => candidate.id === id)!;
-  const pixels = spritePatterns[starter.number % spritePatterns.length]!;
-  return (
-    <svg
-      viewBox="0 0 32 32"
-      aria-hidden="true"
-      className={`pokemon-sprite ${running ? "pokemon-sprite-running" : ""} ${size === "small" ? "size-7" : "size-20"}`}
-      shapeRendering="crispEdges"
-    >
-      {pixels.map(([x, y, width, height], index) => (
-        <rect key={index} x={x} y={y} width={width} height={height} fill="currentColor" opacity={index === 0 ? 0.65 : 1} />
-      ))}
-      <rect x="10" y="13" width="3" height="3" className="fill-background" />
-      <rect x="20" y="13" width="3" height="3" className="fill-background" />
-    </svg>
-  );
-}
-
-function StarterChoices({ onSelect, pending }: { onSelect: (starter: StarterId) => void; pending: boolean }) {
-  return (
-    <div className="starter-scroll space-y-5 overflow-y-auto pr-1">
-      {Array.from({ length: 9 }, (_, index) => index + 1).map((generation) => (
-        <section key={generation}>
-          <div className="mb-2 flex items-center gap-2">
-            <span className="font-mono text-xs font-semibold uppercase tracking-widest text-muted-foreground">Generation {generation}</span>
-            <span className="h-px flex-1 bg-border" />
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            {starters.slice((generation - 1) * 3, generation * 3).map((starter) => (
-              <button
-                key={starter.id}
-                type="button"
-                disabled={pending}
-                onClick={() => onSelect(starter.id)}
-                className="starter-choice group relative flex min-w-0 flex-col items-center overflow-hidden rounded-lg border border-border bg-card px-2 pb-3 pt-2 text-foreground transition hover:-translate-y-0.5 hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span className="absolute right-2 top-2 font-mono text-[10px] text-muted-foreground">#{String(starter.number).padStart(3, "0")}</span>
-                <img src={spriteUrl(starter.number)} alt="" loading="lazy" className="size-16 object-contain [image-rendering:pixelated] transition-transform group-hover:scale-110 sm:size-20" />
-                <span className="w-full truncate text-xs font-semibold sm:text-sm">{starter.name}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function StarterSetup({ error, onClose, selectStarter }: { error: string | null; onClose: () => void; selectStarter: (starter: StarterId) => Promise<void> }) {
-  const [pending, setPending] = useState(false);
-  const choose = async (starter: StarterId) => {
-    setPending(true);
-    await selectStarter(starter);
-    setPending(false);
-  };
-  return (
-    <Modal onClose={onClose} wide>
-      <Button className="absolute right-3 top-3" variant="ghost" size="sm" aria-label="Close starter selection" onClick={onClose}>Close</Button>
-      <div className="mb-4 space-y-1.5">
-        <h2 className="text-lg font-semibold">Choose your coding companion</h2>
-        <p className="text-sm text-muted-foreground">
-          Pick a partner from any generation. They will hang out in every thread and spring into action while an agent is working.
-        </p>
-      </div>
-      <StarterChoices onSelect={(starter) => void choose(starter)} pending={pending} />
-      {error === null ? null : <p className="text-sm text-destructive">{error}</p>}
-    </Modal>
-  );
-}
-
-function CaptureCard({ capture }: { capture: Capture }) {
-  const displaySprite = capture.isShiny
-    ? (capture.shinySpriteUrl ?? shinySpriteUrl(capture.pokemonNumber))
-    : (capture.spriteUrl ?? spriteUrl(capture.pokemonNumber));
-  return (
-    <article className={`pokemon-card group relative overflow-hidden rounded-xl border bg-card ${capture.isShiny ? "border-yellow-400 ring-1 ring-yellow-400/30" : capture.isEgg ? "border-violet-400/60 ring-1 ring-violet-400/20" : "border-border"}`}>
-      <div className="pokemon-art-stage relative flex h-36 items-center justify-center overflow-hidden border-b border-border p-4">
-        <span className="absolute left-4 top-3 font-mono text-xs font-semibold tracking-widest text-muted-foreground">
-          {capture.isEgg ? "RARE EGG" : `#${String(capture.pokemonNumber).padStart(3, "0")}`}
-        </span>
-        {capture.isShiny ? <span className="absolute right-3 top-3 text-lg" title="Shiny!">✨</span> : null}
-        {capture.isEgg ? (
-          <div className="pokemon-egg" role="img" aria-label="Mystery Pokemon egg" />
-        ) : (
-          <button
-            type="button"
-            aria-label={`Play ${capture.pokemonName}'s cry`}
-            title={`Play ${capture.pokemonName}'s cry`}
-            className="h-full w-full max-w-24 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => playPokemonCry(capture.cryUrl)}
-          >
-            <img
-              src={displaySprite}
-              alt=""
-              loading="lazy"
-              className="h-full w-full object-contain [image-rendering:pixelated] transition-transform duration-300 group-hover:scale-125"
-            />
-          </button>
-        )}
-      </div>
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-lg font-bold tracking-tight text-foreground">{capture.isShiny ? `✨ ${capture.pokemonName}` : capture.pokemonName}</h3>
-          <div className="flex flex-wrap justify-end gap-1">
-            <span data-rarity={capture.rarity} className="pokemon-rarity rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">{capture.rarity}</span>
-            {capture.types.map((type) => <span key={type} data-type={type} className="pokemon-type rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">{type}</span>)}
-          </div>
-        </div>
-        {capture.isEgg ? (
-          <div className="mt-3">
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>Incubation</span>
-              <span>{capture.eggSteps.toLocaleString()} / {capture.eggStepsRequired.toLocaleString()} steps</span>
-            </div>
-            <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="Egg incubation progress" aria-valuemin={0} aria-valuemax={capture.eggStepsRequired} aria-valuenow={capture.eggSteps}>
-              <div className="pokemon-egg-progress h-full rounded-full" style={{ width: `${capture.eggStepsRequired === 0 ? 0 : capture.eggSteps / capture.eggStepsRequired * 100}%` }} />
-            </div>
-            <p className="mt-1.5 text-[11px] text-muted-foreground">{capture.eggStepsRequired - capture.eggSteps > 2000 ? "It looks like this Egg will take a long time to hatch." : "Sounds can be heard coming from inside!"}</p>
-          </div>
-        ) : null}
-        {capture.heightDecimeters === null || capture.weightHectograms === null ? null : (
-          <dl className="mt-2 flex gap-4 text-xs text-muted-foreground">
-            <div><dt className="inline font-semibold text-foreground">HT </dt><dd className="inline">{(capture.heightDecimeters / 10).toFixed(1)} m</dd></div>
-            <div><dt className="inline font-semibold text-foreground">WT </dt><dd className="inline">{(capture.weightHectograms / 10).toFixed(1)} kg</dd></div>
-          </dl>
-        )}
-        {capture.flavorText === null ? null : <p className="mt-3 min-h-10 text-xs italic leading-5 text-muted-foreground">{capture.flavorText}</p>}
-        {capture.encounterLocation === null ? null : (
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            {capture.encounterLocation}{capture.encounterLevel === null ? "" : ` · Lv. ${capture.encounterLevel}`}{capture.encounterMethod === null ? "" : ` · ${capture.encounterMethod}`}{capture.encounterVersion === null ? "" : ` · ${capture.encounterVersion}`}
-          </p>
-        )}
-        <div className="mt-4 border-t border-dashed border-border pt-3">
-          <p className="text-xs font-medium leading-5 text-foreground">{capture.description}</p>
-          <time className="mt-1 block font-mono text-[10px] uppercase tracking-wide text-muted-foreground" dateTime={capture.caughtAt}>
-            {capture.isEgg ? "Found" : "Caught"} {new Date(capture.caughtAt).toLocaleDateString()}
-          </time>
-        </div>
-      </div>
-    </article>
-  );
-}
 
 type ConnectionName = "github" | "shortcut" | "jira";
 
@@ -451,7 +204,8 @@ function SettingsPage() {
 
 function CollectionPage() {
   const { collection, error, selectStarter, resetCollection, addDemoReward } = useCollection();
-  const [collectionView, setCollectionView] = useState<"all" | "shiny">("all");
+  const [filters, setFilters] = useState(defaultCollectionFilters);
+  const [page, setPage] = useState(1);
   const [starterDismissed, setStarterDismissed] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetPending, setResetPending] = useState(false);
@@ -470,9 +224,8 @@ function CollectionPage() {
   const activeEggs = collection.captures.filter((capture) => capture.isEgg);
   const hatchedEggs = collection.captures.filter((capture) => capture.eggStepsRequired > 0 && !capture.isEgg);
   const caughtPokemon = collection.captures.filter((capture) => !capture.isEgg);
-  const visibleCaptures = collectionView === "shiny"
-    ? caughtPokemon.filter((capture) => capture.isShiny)
-    : caughtPokemon;
+  const visibleCaptures = filterCaptures(caughtPokemon, filters);
+  const paginatedCaptures = paginateCaptures(visibleCaptures, page);
   return (
     <div className="h-full min-h-0 overflow-y-auto">
       <div className="mx-auto w-full max-w-5xl px-4 py-5 md:px-6">
@@ -543,7 +296,8 @@ function CollectionPage() {
                   setResetPending(true);
                   void resetCollection().then((reset) => {
                     if (reset) {
-                      setCollectionView("all");
+                      setFilters(defaultCollectionFilters);
+                      setPage(1);
                       setStarterDismissed(false);
                       setResetOpen(false);
                     }
@@ -647,124 +401,30 @@ function CollectionPage() {
         </section>
 
         <section className="mt-7">
-          <div className="flex items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">Pokedex</p>
               <h2 className="text-lg font-semibold">Caught Pokemon</h2>
             </div>
-            <div className="flex rounded-lg border border-border bg-muted p-1" aria-label="Filter Pokemon collection">
-              <button
-                type="button"
-                aria-pressed={collectionView === "all"}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition ${collectionView === "all" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => setCollectionView("all")}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                aria-pressed={collectionView === "shiny"}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition ${collectionView === "shiny" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => setCollectionView("shiny")}
-              >
-                ✨ Shiny ({collection.shinyCaptures})
-              </button>
-            </div>
+            <CollectionFilterControls captures={caughtPokemon} filters={filters} onChange={(nextFilters) => {
+              setFilters(nextFilters);
+              setPage(1);
+            }} />
           </div>
           {caughtPokemon.length === 0 ? (
             <div className="mt-3 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Choose a starter to begin your collection.</div>
           ) : visibleCaptures.length === 0 ? (
-            <div className="mt-3 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No shiny Pokemon yet. Keep shipping for another chance.</div>
+            <div className="mt-3 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No Pokemon match these filters.</div>
           ) : (
             <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {visibleCaptures.map((capture) => <CaptureCard key={capture.id} capture={capture} />)}
+              {paginatedCaptures.captures.map((capture) => <CaptureCard key={capture.id} capture={capture} />)}
             </div>
           )}
+          <CollectionPagination page={paginatedCaptures.currentPage} total={visibleCaptures.length} onPageChange={setPage} />
         </section>
       </div>
       {collection.starter === null && !starterDismissed ? <StarterSetup error={error} onClose={() => setStarterDismissed(true)} selectStarter={selectStarter} /> : null}
     </div>
-  );
-}
-
-function FloatingCompanion() {
-  const { collection } = useCollection();
-  const { threads } = experimental_useSidebarThreads();
-  const [position, setPosition] = useState({ x: 32, y: window.innerHeight - 120 });
-  const [isDragging, setIsDragging] = useState(false);
-
-  const isRunning = threads.some(
-    (thread) => thread.indicator === "runtime" || Object.values(thread.activity).some((count) => count > 0)
-  );
-
-  useEffect(() => {
-    if (!isDragging) return;
-    const handleMove = (event: MouseEvent) => {
-      setPosition({ x: event.clientX - 32, y: event.clientY - 32 });
-    };
-    const handleUp = () => setIsDragging(false);
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-    };
-  }, [isDragging]);
-
-  if (collection?.starter === null || collection === null) return null;
-  const starter = starters.find((candidate) => candidate.id === collection.starter)!;
-  const starterCapture = collection.captures.find((capture) => capture.milestone === "starter_selected");
-  const companion = collection.companion;
-  const animated = companion?.animatedSpriteUrl ?? (companion === null ? starterCapture?.animatedSpriteUrl : null) ?? animatedSpriteUrl(companion?.pokemonNumber ?? starter.number);
-  const fallback = companion?.spriteUrl ?? starterCapture?.spriteUrl ?? spriteUrl(companion?.pokemonNumber ?? starter.number);
-  const companionName = companion?.pokemonName ?? starter.name;
-
-  return createPortal(
-    <div
-      className={`pokemon-floating-companion fixed z-50 cursor-grab select-none ${isDragging ? "cursor-grabbing" : ""} ${isRunning ? "pokemon-bouncing" : ""}`}
-      style={{ left: position.x, top: position.y }}
-      onMouseDown={() => setIsDragging(true)}
-      title={`${companionName} · Lv. ${companion?.level ?? 5}${isRunning ? " - Running with your agent!" : ""}`}
-    >
-      <img
-        src={animated ?? fallback}
-        alt={companionName}
-        className="size-16 object-contain [image-rendering:pixelated] drop-shadow-lg"
-        draggable={false}
-      />
-    </div>,
-    document.body
-  );
-}
-
-function ThreadCompanion({ threadId, isCompactViewport }: { threadId: string; isCompactViewport: boolean }) {
-  const { collection } = useCollection();
-  const { threads } = experimental_useSidebarThreads();
-  const navigate = useBbNavigate();
-  const thread = threads.find((candidate) => candidate.id === threadId);
-  const running = thread !== undefined && (
-    thread.indicator === "runtime" ||
-    Object.values(thread.activity).some((count) => count > 0)
-  );
-  if (collection?.starter === null || collection === null) return null;
-  const starter = starters.find((candidate) => candidate.id === collection.starter)!;
-  const companion = collection.companion;
-  const companionName = companion?.pokemonName ?? starter.name;
-  return (
-    <Button
-      variant="ghost"
-      size={isCompactViewport ? "icon" : "sm"}
-      className="h-7 gap-1.5 px-1.5"
-      aria-label={`Open Pokemon collection. ${companionName} is level ${companion?.level ?? 5} and ${running ? "running with your agent" : "resting"}.`}
-      onClick={() => navigate.toPluginPanel("collection")}
-    >
-      {companion === null || companion.pokemonNumber === starter.number ? (
-        <PixelStarter id={starter.id} running={running} size="small" />
-      ) : (
-        <img src={companion.spriteUrl ?? spriteUrl(companion.pokemonNumber)} alt="" className={`size-7 object-contain [image-rendering:pixelated] ${running ? "pokemon-bouncing" : ""}`} />
-      )}
-      {isCompactViewport ? null : <span className="max-w-28 truncate text-xs">{companionName} · Lv. {companion?.level ?? 5}</span>}
-    </Button>
   );
 }
 

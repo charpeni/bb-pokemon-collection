@@ -7,12 +7,15 @@ import {
 	animatedSpriteUrl, cryUrl, milestoneKinds, pokemon, spriteUrl, starterEvolutionChains, starters,
 	type MilestoneKind, type StarterId,
 } from "./pokemon";
+import { generationForPokemon } from "./lib/pokemon/generation";
+import { fetchPokemonDetails, fetchPokemonEncounter, type PokemonCandidate } from "./api/pokeapi";
 
 const starterIdSchema = z.enum(starters.map((starter) => starter.id));
 const milestoneSchema = z.enum(milestoneKinds);
 const raritySchema = z.enum(["common", "uncommon", "rare", "legendary"]);
 const captureSchema = z.object({
 	id: z.string(), pokemonId: z.string(), pokemonName: z.string(), pokemonNumber: z.number().int(),
+	generation: z.number().int().min(1).max(9),
 	spriteUrl: z.string().nullable(), shinySpriteUrl: z.string().nullable(), animatedSpriteUrl: z.string().nullable(),
 	cryUrl: z.string(),
 	isShiny: z.boolean(), heightDecimeters: z.number().int(), weightHectograms: z.number().int(),
@@ -87,12 +90,6 @@ const TOKENS_PER_EGG_STEP = 100;
 const STARTER_EXPERIENCE = 5 ** 3;
 const NATIONAL_DEX_SIZE = 1025;
 type Database = ReturnType<BbPluginApi["storage"]["database"]>;
-type PokemonCandidate = { id: string; name: string; number: number };
-
-function formatPokemonName(name: string) {
-	return name.split("-").map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`).join(" ");
-}
-
 export function chooseFallbackPokemonNumber(eventKey: string) {
 	return createHash("sha256").update(eventKey).digest().readUInt32BE(0) % NATIONAL_DEX_SIZE + 1;
 }
@@ -166,6 +163,7 @@ function rowToCapture(row: Record<string, unknown>): Capture {
 	const number = Number(row.pokemon_number);
 	return {
 		id: String(row.id), pokemonId: String(row.pokemon_id), pokemonName: String(row.pokemon_name), pokemonNumber: number,
+		generation: generationForPokemon(number),
 		spriteUrl: nullableString(row.sprite_url) ?? spriteUrl(number), shinySpriteUrl: nullableString(row.shiny_sprite_url) ?? spriteUrl(number, true),
 		animatedSpriteUrl: nullableString(row.animated_sprite_url) ?? animatedSpriteUrl(number), isShiny: Boolean(row.is_shiny),
 		cryUrl: nullableString(row.cry_url) ?? cryUrl(number),
@@ -189,32 +187,6 @@ function readCaptures(db: Database) {
 	`).all().map((row) => rowToCapture(row as Record<string, unknown>));
 }
 
-async function fetchPokemonDetails(candidate: PokemonCandidate) {
-	let height = 0; let weight = 0; let types: string[] = []; let flavorText: string | null = null;
-	let hatchCounter = 0; let isLegendary = false; let isMythical = false;
-	let id = candidate.id; let name = candidate.name;
-	let resolvedCryUrl = cryUrl(candidate.number);
-	try {
-		const [pokemonResponse, speciesResponse] = await Promise.all([
-			fetch(`https://pokeapi.co/api/v2/pokemon/${candidate.number}`, { signal: AbortSignal.timeout(5000) }),
-			fetch(`https://pokeapi.co/api/v2/pokemon-species/${candidate.number}`, { signal: AbortSignal.timeout(5000) }),
-		]);
-		if (pokemonResponse.ok) {
-			const data = await pokemonResponse.json() as { id?: number; name?: string; height?: number; weight?: number; types?: Array<{ type?: { name?: string } }>; cries?: { latest?: string; legacy?: string } };
-			id = data.name ?? candidate.id; name = data.name === undefined ? candidate.name : formatPokemonName(data.name);
-			height = data.height ?? 0; weight = data.weight ?? 0;
-			types = data.types?.flatMap((entry) => entry.type?.name === undefined ? [] : [entry.type.name]) ?? [];
-			resolvedCryUrl = data.cries?.latest ?? data.cries?.legacy ?? resolvedCryUrl;
-		}
-		if (speciesResponse.ok) {
-			const data = await speciesResponse.json() as { hatch_counter?: number; is_legendary?: boolean; is_mythical?: boolean; flavor_text_entries?: Array<{ flavor_text?: string; language?: { name?: string } }> };
-			flavorText = data.flavor_text_entries?.find((entry) => entry.language?.name === "en")?.flavor_text?.replace(/\s+/gu, " ") ?? null;
-			hatchCounter = data.hatch_counter ?? 0; isLegendary = data.is_legendary ?? false; isMythical = data.is_mythical ?? false;
-		}
-	} catch {}
-	return { id, name, height, weight, types, flavorText, hatchCounter, isLegendary, isMythical, cryUrl: resolvedCryUrl };
-}
-
 async function ensurePokemonDetails(db: Database, candidate: PokemonCandidate) {
 	if (db.prepare("SELECT 1 FROM pokemon_details WHERE pokemon_number = ?").get(candidate.number) !== undefined) return;
 	const details = await fetchPokemonDetails(candidate);
@@ -227,34 +199,6 @@ async function ensurePokemonDetails(db: Database, candidate: PokemonCandidate) {
 	`).run(candidate.number, details.id, details.name, details.height, details.weight, JSON.stringify(details.types),
 		details.flavorText, new Date().toISOString(), spriteUrl(candidate.number), spriteUrl(candidate.number, true), animatedSpriteUrl(candidate.number),
 		details.cryUrl, details.hatchCounter, details.isLegendary ? 1 : 0, details.isMythical ? 1 : 0);
-}
-
-async function fetchEncounter(number: number, eventKey: string) {
-	try {
-		const response = await fetch(`https://pokeapi.co/api/v2/pokemon/${number}/encounters`, { signal: AbortSignal.timeout(5000) });
-		if (!response.ok) return null;
-		const locations = await response.json() as Array<{
-			location_area: { name: string };
-			version_details: Array<{
-				version: { name: string };
-				encounter_details: Array<{ chance: number; min_level: number; max_level: number; method: { name: string } }>;
-			}>;
-		}>;
-		const choices = locations.flatMap((location) => location.version_details.flatMap((version) => version.encounter_details.map((detail) => ({
-			location: formatPokemonName(location.location_area.name.replace(/-area$/u, "")),
-			version: formatPokemonName(version.version.name), method: formatPokemonName(detail.method.name),
-			chance: detail.chance, minLevel: detail.min_level, maxLevel: detail.max_level,
-		}))));
-		if (choices.length === 0) return null;
-		const digest = createHash("sha256").update(`${eventKey}:encounter`).digest();
-		const total = choices.reduce((sum, choice) => sum + Math.max(1, choice.chance), 0);
-		let roll = digest.readUInt32BE(0) % total;
-		const choice = choices.find((candidate) => (roll -= Math.max(1, candidate.chance)) < 0) ?? choices[0]!;
-		const range = Math.max(1, choice.maxLevel - choice.minLevel + 1);
-		return { ...choice, level: choice.minLevel + digest.readUInt32BE(4) % range };
-	} catch {
-		return null;
-	}
 }
 
 function milestoneDescription(input: z.infer<typeof recordInputSchema>) {
@@ -271,7 +215,7 @@ async function recordMilestone(db: Database, bb: BbPluginApi, input: z.infer<typ
 	const candidate = { id: `pokemon-${number}`, name: `Pokémon #${number}`, number };
 	await ensurePokemonDetails(db, candidate);
 	const shiny = Math.floor(Math.random() * 4096) === 0;
-	const encounter = await fetchEncounter(number, key);
+	const encounter = await fetchPokemonEncounter(number, key);
 	const detailRow = db.prepare(`SELECT pokemon_id, pokemon_name, hatch_counter, is_legendary, is_mythical
 		FROM pokemon_details WHERE pokemon_number = ?`).get(number) as {
 		pokemon_id?: string; pokemon_name?: string; hatch_counter?: number; is_legendary?: number; is_mythical?: number;

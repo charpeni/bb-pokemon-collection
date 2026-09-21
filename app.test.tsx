@@ -32,6 +32,7 @@ const collection: Collection = {
 			pokemonId: "dratini",
 			pokemonName: "Dratini",
 			pokemonNumber: 147,
+			generation: 1,
 			spriteUrl: "https://example.invalid/dratini.png",
 			shinySpriteUrl: "https://example.invalid/dratini-shiny.png",
 			animatedSpriteUrl: "https://example.invalid/dratini.gif",
@@ -64,6 +65,7 @@ const collection: Collection = {
 			pokemonId: "ponyta",
 			pokemonName: "Ponyta",
 			pokemonNumber: 77,
+			generation: 1,
 			spriteUrl: "https://example.invalid/ponyta.png",
 			shinySpriteUrl: "https://example.invalid/ponyta-shiny.png",
 			animatedSpriteUrl: "https://example.invalid/ponyta.gif",
@@ -167,7 +169,20 @@ describe("Pokemon collection app", () => {
 		expect(slot.getByText("Egg Incubator")).toBeTruthy();
 		expect(slot.getByText("Ways to earn a catch")).toBeTruthy();
 		expect(slot.getByText("Caught Pokemon")).toBeTruthy();
-		expect(slot.getByRole("button", { name: "✨ Shiny (1)" })).toBeTruthy();
+		expect(slot.getByRole("button", { name: "✨ Shiny" })).toBeTruthy();
+		expect(slot.getByLabelText("Filter by type")).toBeTruthy();
+		expect(slot.getByLabelText("Filter by rarity")).toBeTruthy();
+		expect(slot.getByLabelText("Filter by generation")).toBeTruthy();
+		expect(slot.getAllByText("Gen 1", { selector: "span" })).toHaveLength(2);
+		fireEvent.change(slot.getByLabelText("Filter by type"), { target: { value: "fire" } });
+		expect(slot.getByText(/Ponyta$/)).toBeTruthy();
+		fireEvent.change(slot.getByLabelText("Filter by generation"), { target: { value: "2" } });
+		expect(slot.getByText("No Pokemon match these filters.")).toBeTruthy();
+		fireEvent.click(slot.getByRole("button", { name: "Clear filters" }));
+		fireEvent.change(slot.getByLabelText("Filter by rarity"), { target: { value: "rare" } });
+		expect(slot.getByText("No Pokemon match these filters.")).toBeTruthy();
+		fireEvent.click(slot.getByRole("button", { name: "Clear filters" }));
+		expect(slot.getByText(/Ponyta$/)).toBeTruthy();
 		expect(slot.getByRole("button", { name: "Developer tools" })).toBeTruthy();
 		expect(slot.getByText("Mt. Coronet · Lv. 15 · walk · platinum")).toBeTruthy();
 		fireEvent.click(slot.getByRole("button", { name: "Play Ponyta's cry" }));
@@ -182,6 +197,53 @@ describe("Pokemon collection app", () => {
 		fireEvent.click(reset);
 		fireEvent.click(slot.getByRole("button", { name: "Reset everything" }));
 		await vi.waitFor(() => expect(resets).toBe(1));
+
+		slot.lifecycle.unmount();
+	});
+
+	it("paginates filtered Pokedex entries and returns to the first page when filters change", async () => {
+		const template = collection.captures[1]!;
+		const paginatedCollection: Collection = {
+			...collection,
+			captures: [
+				collection.captures[0]!,
+				...Array.from({ length: 11 }, (_, index) => ({
+					...template,
+					id: `caught-${index + 1}`,
+					pokemonName: `Pokemon ${index + 1}`,
+					pokemonNumber: 77 + index,
+					description: `Caught Pokemon ${index + 1}`,
+				})),
+			],
+			totalCaptures: 12,
+			uniquePokemon: 12,
+		};
+		const app = await loadPluginApp(() => import("./app"));
+		const slot = renderSlot(app.navPanels[0]!, { subPath: "" }, {
+			rpc: {
+				collection_get: () => paginatedCollection,
+				collection_reset: () => paginatedCollection,
+				demo_reward_add: () => paginatedCollection,
+				starter_select: () => paginatedCollection,
+			},
+		});
+
+		expect(await slot.findByText("Showing 1–9 of 11")).toBeTruthy();
+		expect(slot.getByText("Page 1 of 2")).toBeTruthy();
+		expect(slot.getByText("✨ Pokemon 1")).toBeTruthy();
+		expect(slot.queryByText("✨ Pokemon 10")).toBeNull();
+		fireEvent.click(slot.getByRole("button", { name: "Next" }));
+		expect(slot.getByText("Showing 10–11 of 11")).toBeTruthy();
+		expect(slot.getByText("Page 2 of 2")).toBeTruthy();
+		expect(slot.queryByText("✨ Pokemon 1")).toBeNull();
+		expect(slot.getByText("✨ Pokemon 10")).toBeTruthy();
+
+		fireEvent.change(slot.getByLabelText("Filter by generation"), { target: { value: "2" } });
+		expect(slot.getByText("No Pokemon match these filters.")).toBeTruthy();
+		expect(slot.queryByRole("navigation", { name: "Pokedex pagination" })).toBeNull();
+		fireEvent.click(slot.getByRole("button", { name: "Clear filters" }));
+		expect(slot.getByText("Page 1 of 2")).toBeTruthy();
+		expect(slot.getByText("✨ Pokemon 1")).toBeTruthy();
 
 		slot.lifecycle.unmount();
 	});

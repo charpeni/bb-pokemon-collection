@@ -6,8 +6,9 @@ A BB plugin that rewards engineering milestones with Pokémon catches.
 
 The Pokémon collection panel includes all 27 starters from generations 1–9,
 random encounters spanning the National Pokédex, an evolving companion,
-animated sprites, grouped duplicate counts, encounter details, rarity and type
-badges, shiny and type filters, and an egg incubator. The companion also appears
+animated sprites, grouped duplicate counts, encounter details, rarity, type,
+and generation badges, shiny/type/rarity/generation filters, paginated Pokedex
+entries, and an egg incubator. The companion also appears
 in the thread header and as a draggable overlay that becomes more active while
 agents are working.
 

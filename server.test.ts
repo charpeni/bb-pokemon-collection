@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import plugin, { chooseFallbackPokemonNumber, rarityForEncounterChance, rarityForPokemon } from "./server";
 import { starterEvolutionChains, starters } from "./pokemon";
+import { generationForPokemon } from "./lib/pokemon/generation";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -48,6 +49,7 @@ describe("Pokemon Catcher server", () => {
 			cryUrl: "https://example.invalid/testmon.ogg",
 			encounterLocation: "Test Grove", encounterVersion: "Platinum", encounterMethod: "Walk",
 		});
+		expect(result.captures[0]?.generation).toBe(generationForPokemon(Number(result.captures[0]?.pokemonNumber)));
 		await harness.lifecycle.dispose();
 	});
 
