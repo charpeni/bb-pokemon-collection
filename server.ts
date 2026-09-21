@@ -10,12 +10,13 @@ import {
 
 const starterIdSchema = z.enum(starters.map((starter) => starter.id));
 const milestoneSchema = z.enum(milestoneKinds);
+const raritySchema = z.enum(["common", "uncommon", "rare", "legendary"]);
 const captureSchema = z.object({
 	id: z.string(), pokemonId: z.string(), pokemonName: z.string(), pokemonNumber: z.number().int(),
 	spriteUrl: z.string().nullable(), shinySpriteUrl: z.string().nullable(), animatedSpriteUrl: z.string().nullable(),
 	cryUrl: z.string(),
 	isShiny: z.boolean(), heightDecimeters: z.number().int(), weightHectograms: z.number().int(),
-	types: z.array(z.string()), flavorText: z.string().nullable(), rarity: z.string(), isEgg: z.boolean(),
+	types: z.array(z.string()), flavorText: z.string().nullable(), rarity: raritySchema, isEgg: z.boolean(),
 	eggSteps: z.number().int(), eggStepsRequired: z.number().int(), hatchedAt: z.string().nullable(),
 	encounterLocation: z.string().nullable(), encounterVersion: z.string().nullable(), encounterMethod: z.string().nullable(),
 	encounterChance: z.number().int().nullable(), encounterLevel: z.number().int().nullable(), milestone: z.string(),
@@ -48,6 +49,7 @@ const settingsSchema = z.object({
 
 export type Collection = z.infer<typeof collectionSchema>;
 export type Capture = z.infer<typeof captureSchema>;
+export type PokemonRarity = z.infer<typeof raritySchema>;
 export type PokemonSettings = z.infer<typeof settingsSchema>;
 export const rpcContract = defineRpcContract({
 	collection_get: { input: z.null(), output: collectionSchema },
@@ -101,6 +103,14 @@ export function rarityForEncounterChance(chance: number): "common" | "uncommon" 
 	return "rare";
 }
 
+const starterNumbers = new Set<number>(starters.map((starter) => starter.number));
+
+export function rarityForPokemon(number: number, encounterChance: number | null, isLegendary: boolean, isMythical: boolean): PokemonRarity {
+	if (isLegendary || isMythical) return "legendary";
+	if (starterNumbers.has(number)) return "rare";
+	return encounterChance === null ? "common" : rarityForEncounterChance(encounterChance);
+}
+
 function ensureTables(db: Database) {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS pokemon_details (
@@ -134,6 +144,15 @@ function ensureTables(db: Database) {
 	`);
 	const detailColumns = db.prepare("PRAGMA table_info(pokemon_details)").all() as Array<{ name: string }>;
 	if (!detailColumns.some((column) => column.name === "cry_url")) db.exec("ALTER TABLE pokemon_details ADD COLUMN cry_url TEXT");
+	db.exec(`
+		UPDATE captures SET
+			rarity = 'rare',
+			egg_steps_required = CASE
+				WHEN milestone = 'starter_selected' OR hatched_at IS NOT NULL OR egg_steps_required > 0 THEN egg_steps_required
+				ELSE 255 * (COALESCE((SELECT hatch_counter FROM pokemon_details WHERE pokemon_number = captures.pokemon_number), 20) + 1)
+			END
+		WHERE pokemon_number IN (${[...starterNumbers].join(",")}) AND rarity != 'legendary'
+	`);
 }
 
 function nullableString(value: unknown) {
@@ -149,7 +168,7 @@ function rowToCapture(row: Record<string, unknown>): Capture {
 		cryUrl: nullableString(row.cry_url) ?? cryUrl(number),
 		heightDecimeters: Number(row.height_decimeters ?? 0), weightHectograms: Number(row.weight_hectograms ?? 0),
 		types: JSON.parse(String(row.types_json ?? "[]")) as string[], flavorText: nullableString(row.flavor_text),
-		rarity: String(row.rarity ?? "common"), isEgg: Number(row.egg_steps_required ?? 0) > 0 && row.hatched_at === null,
+		rarity: raritySchema.catch("common").parse(row.rarity), isEgg: Number(row.egg_steps_required ?? 0) > 0 && row.hatched_at === null,
 		eggSteps: Number(row.egg_steps ?? 0), eggStepsRequired: Number(row.egg_steps_required ?? 0), hatchedAt: nullableString(row.hatched_at),
 		encounterLocation: nullableString(row.encounter_location), encounterVersion: nullableString(row.encounter_version),
 		encounterMethod: nullableString(row.encounter_method), encounterChance: row.encounter_chance === null ? null : Number(row.encounter_chance),
@@ -255,9 +274,7 @@ async function recordMilestone(db: Database, bb: BbPluginApi, input: z.infer<typ
 		pokemon_id?: string; pokemon_name?: string; hatch_counter?: number; is_legendary?: number; is_mythical?: number;
 	} | undefined;
 	const resolved = { id: detailRow?.pokemon_id ?? candidate.id, name: detailRow?.pokemon_name ?? candidate.name, number };
-	const rarity = detailRow?.is_legendary === 1 || detailRow?.is_mythical === 1
-		? "legendary"
-		: encounter === null ? "common" : rarityForEncounterChance(encounter.chance);
+	const rarity = rarityForPokemon(number, encounter?.chance ?? null, detailRow?.is_legendary === 1, detailRow?.is_mythical === 1);
 	const isEgg = rarity === "rare";
 	const eggStepsRequired = isEgg ? 255 * (Number(detailRow?.hatch_counter ?? 20) + 1) : 0;
 	const insertion = db.prepare(`
@@ -310,7 +327,7 @@ async function selectStarter(db: Database, bb: BbPluginApi, starterId: StarterId
 		db.prepare(`
 			INSERT INTO captures (id, event_key, pokemon_id, pokemon_name, pokemon_number, milestone, source,
 				reference, title, description, url, caught_at, is_shiny, rarity)
-			VALUES (?, ?, ?, ?, ?, 'starter_selected', 'Pokemon Catcher', 'starter', ?, ?, NULL, ?, 0, 'common')
+			VALUES (?, ?, ?, ?, ?, 'starter_selected', 'Pokemon Catcher', 'starter', ?, ?, NULL, ?, 0, 'rare')
 		`).run(randomUUID(), `starter:${starterId}`, starter.id, starter.name, starter.number, `${starter.name} joined your journey`,
 			`Chose ${starter.name} as your starter companion`, new Date().toISOString());
 	}

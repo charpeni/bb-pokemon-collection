@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
-import plugin, { chooseFallbackPokemonNumber, rarityForEncounterChance } from "./server";
+import plugin, { chooseFallbackPokemonNumber, rarityForEncounterChance, rarityForPokemon } from "./server";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,6 +12,14 @@ describe("Pokemon Catcher server", () => {
 		expect([rarityForEncounterChance(30), rarityForEncounterChance(15), rarityForEncounterChance(5)]).toEqual([
 			"common", "uncommon", "rare",
 		]);
+	});
+
+	it("classifies starters independently from encounter rarity", () => {
+		expect(rarityForPokemon(1, 100, false, false)).toBe("rare");
+		expect(rarityForPokemon(906, null, false, false)).toBe("rare");
+		expect(rarityForPokemon(25, 100, false, false)).toBe("common");
+		expect(rarityForPokemon(25, 5, false, false)).toBe("rare");
+		expect(rarityForPokemon(144, null, true, false)).toBe("legendary");
 	});
 
 	it("persists fetched National Pokedex identity and encounter metadata", async () => {
@@ -70,6 +78,8 @@ describe("Pokemon Catcher server", () => {
 		});
 		await plugin(bb);
 		await harness.behavior.callRpc("starter_select", { starterId: "fennekin" });
+		const starterCollection = await harness.behavior.callRpc("collection_get", null) as { captures: Array<{ pokemonId: string; rarity: string; isEgg: boolean }> };
+		expect(starterCollection.captures.find((capture) => capture.pokemonId === "fennekin")).toMatchObject({ rarity: "rare", isEgg: false });
 		await harness.behavior.callRpc("demo_reward_add", { kind: "egg" });
 		await harness.behavior.callRpc("demo_reward_add", { kind: "shiny" });
 
