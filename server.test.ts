@@ -165,6 +165,47 @@ describe("Pokemon Catcher server", () => {
 		await harness.lifecycle.dispose();
 	});
 
+	it("rewards a branch and its subsequently created worktree only once", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+		let scan = 0;
+		const { bb, harness } = createFakePluginHost({
+			pluginId: "pokemon-catcher",
+			hasHostEntry: true,
+			agentSkillIds: ["pokemon-catcher"],
+			sdk: {
+				projects: {
+					list: async () => [{
+						id: "proj_1", kind: "standard", name: "Repo", gitRemoteUrl: null,
+						createdAt: 1, updatedAt: 1,
+						sources: [{ id: "src_1", projectId: "proj_1", hostId: "host_1", type: "local_path", path: "/repo", isDefault: true, createdAt: 1, updatedAt: 1 }],
+					}],
+				},
+				environments: { list: async () => [] },
+			},
+			experimental_callHostRpc: async () => {
+				const currentScan = scan++;
+				return {
+					repositories: [{
+						root: "/repo", repoId: "/repo/.git",
+						branches: currentScan === 0 ? ["main"] : ["feature/bb-worktree", "main"],
+						worktrees: currentScan < 2
+							? [{ path: "/repo", branch: "main" }]
+							: [{ path: "/repo", branch: "main" }, { path: "/worktree", branch: "feature/bb-worktree" }],
+					}],
+				};
+			},
+		});
+		await plugin(bb);
+
+		for (let expectedScan = 1; expectedScan <= 3; expectedScan += 1) {
+			await harness.behavior.emitThreadEvent("thread.active", { thread: makeThreadResponse({ id: "thr_1" }) });
+			await vi.waitFor(() => expect(scan).toBe(expectedScan));
+		}
+
+		expect((await harness.behavior.callRpc("collection_get", null) as { totalCaptures: number }).totalCaptures).toBe(1);
+		await harness.lifecycle.dispose();
+	});
+
 	it("verifies GitHub credentials, persists repository selection, and baselines remote events", async () => {
 		let eventBatch = 0;
 		let eventRequests = 0;

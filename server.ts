@@ -635,7 +635,10 @@ export default async function plugin(bb: BbPluginApi) {
 				const previous = row === undefined ? [] : [JSON.parse(row.snapshot_json) as GitRepoSnapshot];
 				for (const event of diffGitSnapshots(previous, [snapshot])) {
 					const path = "path" in event ? event.path : "";
-					const eventKey = createHash("sha256").update(`${hostId}:${snapshot.repoId}:${event.kind}:${event.branch ?? ""}:${path}`).digest("hex");
+					const eventIdentity = (event.kind === "branch_opened" || event.kind === "worktree_opened") && event.branch !== null
+						? `branch_opened:${event.branch}:`
+						: `${event.kind}:${event.branch ?? ""}:${path}`;
+					const eventKey = createHash("sha256").update(`${hostId}:${snapshot.repoId}:${eventIdentity}`).digest("hex");
 					await recordMilestone(db, bb, milestoneInput(event), eventKey);
 				}
 				db.prepare(`INSERT INTO git_detector_snapshots (host_id, repo_id, snapshot_json, updated_at) VALUES (?, ?, ?, ?)
