@@ -9,4 +9,4 @@ After personally verifying a successful commit, closed pull request, or complete
 
 Never claim rewards for planned, attempted, or partial work. Branches and BB worktrees in known project repositories are detected automatically; do not manually record a branch reward that the detector will discover.
 
-Use `bb pokemon collection --json` to inspect the collection and `bb pokemon --help` for command details.
+Use `bb pokemon collection --json` to inspect the collection, `bb pokemon companion <capture-id>` to select any caught or hatched Pokémon as the active companion, and `bb pokemon --help` for command details. Companions retain separate experience. Evolved forms become their own Pokédex entries; item, special, and trade evolution abilities unlock through token milestones.

@@ -8,7 +8,7 @@ import {
 	type MilestoneKind, type StarterId,
 } from "./pokemon";
 import { generationForPokemon } from "./lib/pokemon/generation";
-import { fetchPokemonDetails, fetchPokemonEncounter, type PokemonCandidate } from "./api/pokeapi";
+import { fetchEvolutionPath, fetchPokemonDetails, fetchPokemonEncounter, type EvolutionStage, type PokemonCandidate } from "./api/pokeapi";
 
 const starterIdSchema = z.enum(starters.map((starter) => starter.id));
 const milestoneSchema = z.enum(milestoneKinds);
@@ -26,10 +26,12 @@ const captureSchema = z.object({
 	source: z.string(), reference: z.string(), title: z.string(), description: z.string(), url: z.string().nullable(), caughtAt: z.string(),
 });
 const companionSchema = z.object({
-	starterId: starterIdSchema, pokemonId: z.string(), pokemonName: z.string(), pokemonNumber: z.number().int(),
+	captureId: z.string(), pokemonId: z.string(), pokemonName: z.string(), pokemonNumber: z.number().int(),
 	spriteUrl: z.string(), animatedSpriteUrl: z.string().nullable(), level: z.number().int(), experience: z.number().int(),
 	experienceIntoLevel: z.number().int(), experienceForNextLevel: z.number().int(), totalTokens: z.number().int(),
-	tokensPerExperience: z.number().int(), nextEvolution: z.object({ name: z.string(), level: z.number().int() }).nullable(),
+	tokensPerExperience: z.number().int(), nextEvolution: z.object({
+		name: z.string(), method: z.string(), level: z.number().int().nullable(), tokenTarget: z.number().int().nullable(),
+	}).nullable(),
 });
 const collectionSchema = z.object({
 	starter: starterIdSchema.nullable(), companion: companionSchema.nullable(), captures: z.array(captureSchema),
@@ -59,6 +61,7 @@ export const rpcContract = defineRpcContract({
 	collection_reset: { input: z.null(), output: collectionSchema },
 	demo_reward_add: { input: z.object({ kind: z.enum(["egg", "shiny"]) }).strict(), output: collectionSchema },
 	starter_select: { input: z.object({ starterId: starterIdSchema }), output: collectionSchema },
+	companion_select: { input: z.object({ captureId: z.string().uuid() }).strict(), output: collectionSchema },
 	settings_get: { input: z.null(), output: settingsSchema },
 	settings_update: {
 		input: z.object({
@@ -130,6 +133,10 @@ function ensureTables(db: Database) {
 			encounter_version TEXT, encounter_method TEXT, encounter_chance INTEGER, encounter_level INTEGER
 		);
 		CREATE TABLE IF NOT EXISTS companion_progress (id INTEGER PRIMARY KEY CHECK (id = 1), total_tokens INTEGER NOT NULL DEFAULT 0);
+		CREATE TABLE IF NOT EXISTS companion_roster (
+			capture_id TEXT PRIMARY KEY, total_tokens INTEGER NOT NULL DEFAULT 0, evolution_path_json TEXT NOT NULL,
+			FOREIGN KEY (capture_id) REFERENCES captures(id)
+		);
 		CREATE TABLE IF NOT EXISTS thread_token_usage (thread_id TEXT PRIMARY KEY, total_tokens INTEGER NOT NULL);
 		CREATE TABLE IF NOT EXISTS incubator_state (id INTEGER PRIMARY KEY CHECK (id = 1), token_remainder INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE IF NOT EXISTS git_detector_snapshots (
@@ -148,7 +155,8 @@ function ensureTables(db: Database) {
 		UPDATE captures SET
 			rarity = 'rare',
 			egg_steps_required = CASE
-				WHEN milestone = 'starter_selected' OR hatched_at IS NOT NULL OR egg_steps_required > 0 THEN egg_steps_required
+				WHEN milestone IN ('starter_selected', 'companion_evolved') THEN 0
+				WHEN hatched_at IS NOT NULL OR egg_steps_required > 0 THEN egg_steps_required
 				ELSE 255 * (COALESCE((SELECT hatch_counter FROM pokemon_details WHERE pokemon_number = captures.pokemon_number), 20) + 1)
 			END
 		WHERE pokemon_number IN (${[...starterFamilyNumbers].join(",")}) AND rarity != 'legendary'
@@ -240,27 +248,75 @@ async function recordMilestone(db: Database, bb: BbPluginApi, input: z.infer<typ
 	return { caught: true as const, message: isEgg ? "A mysterious rare Egg appeared!" : `${shiny ? "Shiny " : ""}${resolved.name} was caught!` };
 }
 
-function companionFor(starterId: StarterId, totalTokens: number) {
-	const starter = starters.find((entry) => entry.id === starterId)!;
+function fallbackEvolutionPath(candidate: PokemonCandidate): EvolutionStage[] {
+	const starter = starters.find((entry) => entry.number === candidate.number);
+	if (starter === undefined) return [{ ...candidate, requirement: null }];
+	return [
+		{ ...starter, requirement: null },
+		...starterEvolutionChains[starter.id].map((entry) => ({ ...entry, requirement: { kind: "level" as const, level: entry.level, method: `Reach level ${entry.level}` } })),
+	];
+}
+
+function companionState(capture: Capture, totalTokens: number, path: EvolutionStage[]) {
 	const experience = Math.min(100 ** 3, Math.floor(totalTokens / TOKENS_PER_EXPERIENCE) + STARTER_EXPERIENCE);
 	const level = Math.min(100, Math.max(1, Math.floor(Math.cbrt(experience))));
-	const chain = starterEvolutionChains[starterId];
-	const current = [...chain].reverse().find((entry) => level >= entry.level) ?? starter;
-	const nextEvolution = chain.find((entry) => level < entry.level) ?? null;
+	let current = path[0] ?? { id: capture.pokemonId, name: capture.pokemonName, number: capture.pokemonNumber, requirement: null };
+	let next: { stage: EvolutionStage; tokenTarget: number | null } | null = null;
+	let tokenTarget = 0;
+	for (const stage of path.slice(1)) {
+		const requirement = stage.requirement;
+		if (requirement?.kind === "tokens") tokenTarget += requirement.tokens;
+		const unlocked = requirement?.kind === "level" ? level >= requirement.level : requirement?.kind === "tokens" ? totalTokens >= tokenTarget : true;
+		if (!unlocked) { next = { stage, tokenTarget: requirement?.kind === "tokens" ? tokenTarget : null }; break; }
+		current = stage;
+	}
+	const requirement = next?.stage.requirement ?? null;
 	return {
-		starterId, pokemonId: current.id, pokemonName: current.name, pokemonNumber: current.number,
+		captureId: capture.id, pokemonId: current.id, pokemonName: current.name, pokemonNumber: current.number,
 		spriteUrl: spriteUrl(current.number), animatedSpriteUrl: animatedSpriteUrl(current.number), level, experience,
 		experienceIntoLevel: experience - level ** 3, experienceForNextLevel: level === 100 ? 0 : (level + 1) ** 3 - level ** 3,
 		totalTokens, tokensPerExperience: TOKENS_PER_EXPERIENCE,
-		nextEvolution: nextEvolution === null ? null : { name: nextEvolution.name, level: nextEvolution.level },
+		nextEvolution: next === null || requirement === null ? null : {
+			name: next.stage.name, method: requirement.kind === "tokens" ? `${requirement.method} at ${next.tokenTarget?.toLocaleString()} total tokens` : requirement.method,
+			level: requirement.kind === "level" ? requirement.level : null,
+			tokenTarget: next.tokenTarget,
+		},
 	};
+}
+
+async function ensureCompanionRoster(db: Database, capture: Capture, legacyTokens = 0) {
+	const existing = db.prepare("SELECT capture_id FROM companion_roster WHERE capture_id = ?").get(capture.id);
+	if (existing !== undefined) return;
+	const fetched = await fetchEvolutionPath(capture.pokemonNumber);
+	const path = fetched.length === 0 ? fallbackEvolutionPath({ id: capture.pokemonId, name: capture.pokemonName, number: capture.pokemonNumber }) : fetched;
+	db.prepare("INSERT OR IGNORE INTO companion_roster (capture_id, total_tokens, evolution_path_json) VALUES (?, ?, ?)")
+		.run(capture.id, legacyTokens, JSON.stringify(path));
+}
+
+async function activeCompanionCapture(db: Database, bb: BbPluginApi, captures: Capture[]) {
+	let captureId = await bb.storage.kv.get<string>("activeCompanionCaptureId");
+	let capture = captures.find((entry) => entry.id === captureId && !entry.isEgg) ?? null;
+	if (capture === null) {
+		capture = captures.find((entry) => entry.milestone === "starter_selected") ?? null;
+		if (capture === null) return null;
+		captureId = capture.id;
+		await bb.storage.kv.set("activeCompanionCaptureId", captureId);
+	}
+	const legacy = db.prepare("SELECT total_tokens FROM companion_progress WHERE id = 1").get() as { total_tokens?: number } | undefined;
+	await ensureCompanionRoster(db, capture, capture.milestone === "starter_selected" ? Number(legacy?.total_tokens ?? 0) : 0);
+	const row = db.prepare("SELECT total_tokens, evolution_path_json FROM companion_roster WHERE capture_id = ?").get(capture.id) as { total_tokens: number; evolution_path_json: string };
+	return companionState(capture, row.total_tokens, JSON.parse(row.evolution_path_json) as EvolutionStage[]);
 }
 
 async function readCollection(db: Database, bb: BbPluginApi): Promise<Collection> {
 	const starter = await bb.storage.kv.get<StarterId>("starter") ?? null;
-	const captures = readCaptures(db);
-	const tokenRow = db.prepare("SELECT total_tokens FROM companion_progress WHERE id = 1").get() as { total_tokens?: number } | undefined;
-	return { starter, companion: starter === null ? null : companionFor(starter, Number(tokenRow?.total_tokens ?? 0)), captures,
+	let captures = readCaptures(db);
+	const companion = starter === null ? null : await activeCompanionCapture(db, bb, captures);
+	if (companion !== null) {
+		await recordReachedEvolutions(db, bb, companion.captureId);
+		captures = readCaptures(db);
+	}
+	return { starter, companion, captures,
 		uniquePokemon: new Set(captures.map((capture) => capture.pokemonNumber)).size, totalCaptures: captures.length,
 		shinyCaptures: captures.filter((capture) => capture.isShiny).length };
 }
@@ -271,20 +327,61 @@ async function selectStarter(db: Database, bb: BbPluginApi, starterId: StarterId
 	if (current === undefined) {
 		const starter = starters.find((entry) => entry.id === starterId)!;
 		await ensurePokemonDetails(db, starter);
+		const captureId = randomUUID();
 		db.prepare(`
 			INSERT INTO captures (id, event_key, pokemon_id, pokemon_name, pokemon_number, milestone, source,
 				reference, title, description, url, caught_at, is_shiny, rarity)
 			VALUES (?, ?, ?, ?, ?, 'starter_selected', 'Pokemon Catcher', 'starter', ?, ?, NULL, ?, 0, 'rare')
-		`).run(randomUUID(), `starter:${starterId}`, starter.id, starter.name, starter.number, `${starter.name} joined your journey`,
+		`).run(captureId, `starter:${starterId}`, starter.id, starter.name, starter.number, `${starter.name} joined your journey`,
 			`Chose ${starter.name} as your starter companion`, new Date().toISOString());
+		await bb.storage.kv.set("activeCompanionCaptureId", captureId);
+		const capture = readCaptures(db).find((entry) => entry.id === captureId)!;
+		await ensureCompanionRoster(db, capture);
 	}
 	bb.realtime.publish(COLLECTION_CHANGED, { reason: "starter_selected" });
 	return readCollection(db, bb);
 }
 
+async function selectCompanion(db: Database, bb: BbPluginApi, captureId: string) {
+	const capture = readCaptures(db).find((entry) => entry.id === captureId);
+	if (capture === undefined || capture.isEgg) throw new Error("Choose a caught or hatched Pokemon as your companion.");
+	await ensureCompanionRoster(db, capture);
+	await bb.storage.kv.set("activeCompanionCaptureId", capture.id);
+	bb.realtime.publish(COLLECTION_CHANGED, { reason: "companion_selected" });
+	return readCollection(db, bb);
+}
+
+async function recordReachedEvolutions(db: Database, bb: BbPluginApi, captureId: string) {
+	const captures = readCaptures(db);
+	const origin = captures.find((entry) => entry.id === captureId);
+	if (origin === undefined) return;
+	const row = db.prepare("SELECT total_tokens, evolution_path_json FROM companion_roster WHERE capture_id = ?").get(captureId) as { total_tokens: number; evolution_path_json: string } | undefined;
+	if (row === undefined) return;
+	const path = JSON.parse(row.evolution_path_json) as EvolutionStage[];
+	const state = companionState(origin, row.total_tokens, path);
+	const reachedIndex = path.findIndex((entry) => entry.number === state.pokemonNumber);
+	let changed = false;
+	for (let index = 1; index <= reachedIndex; index += 1) {
+		const stage = path[index]!;
+		const previous = path[index - 1]!;
+		await ensurePokemonDetails(db, stage);
+		const result = db.prepare(`
+			INSERT OR IGNORE INTO captures (id, event_key, pokemon_id, pokemon_name, pokemon_number, milestone, source,
+				reference, title, description, url, caught_at, is_shiny, rarity)
+			VALUES (?, ?, ?, ?, ?, 'companion_evolved', 'Agentic coding', ?, ?, ?, NULL, ?, ?, ?)
+		`).run(randomUUID(), `evolution:${captureId}:${stage.number}`, stage.id, stage.name, stage.number, captureId,
+			`${previous.name} evolved into ${stage.name}`, `Evolved from ${previous.name} through the power of agentic coding!`,
+			new Date().toISOString(), origin.isShiny ? 1 : 0, origin.rarity);
+		changed = changed || result.changes > 0;
+	}
+	if (changed) bb.realtime.publish(COLLECTION_CHANGED, { reason: "companion_evolved" });
+}
+
 async function resetCollection(db: Database, bb: BbPluginApi) {
 	await bb.storage.kv.delete("starter");
+	await bb.storage.kv.delete("activeCompanionCaptureId");
 	db.transaction(() => {
+		db.prepare("DELETE FROM companion_roster").run();
 		db.prepare("DELETE FROM captures").run();
 		db.prepare("DELETE FROM pokemon_details").run();
 		db.prepare("DELETE FROM companion_progress").run();
@@ -462,6 +559,7 @@ export default async function plugin(bb: BbPluginApi) {
 		collection_reset: () => resetCollection(db, bb),
 		demo_reward_add: ({ kind }) => addDemoReward(db, bb, kind),
 		starter_select: ({ starterId }) => selectStarter(db, bb, starterId),
+		companion_select: ({ captureId }) => selectCompanion(db, bb, captureId),
 		settings_get: () => readSettings(),
 		settings_update: async ({ watchedRepositories, projectManagementTool }) => {
 			const current = await bb.storage.kv.get<string[]>("watchedRepositories") ?? [];
@@ -505,6 +603,13 @@ export default async function plugin(bb: BbPluginApi) {
 
 	bb.events.on("experimental_thread.events", async ({ thread }) => {
 		if (await bb.storage.kv.get<StarterId>("starter") === undefined) return;
+		const captures = readCaptures(db);
+		const activeCaptureId = await bb.storage.kv.get<string>("activeCompanionCaptureId")
+			?? captures.find((capture) => capture.milestone === "starter_selected")?.id;
+		if (activeCaptureId === undefined) return;
+		const activeCapture = captures.find((capture) => capture.id === activeCaptureId);
+		if (activeCapture === undefined) return;
+		await ensureCompanionRoster(db, activeCapture);
 		const events = await bb.sdk.threads.events.list({
 			threadId: thread.id,
 			types: ["thread/tokenUsage/updated"],
@@ -521,8 +626,7 @@ export default async function plugin(bb: BbPluginApi) {
 			db.prepare(`INSERT INTO thread_token_usage (thread_id, total_tokens) VALUES (?, ?)
 				ON CONFLICT(thread_id) DO UPDATE SET total_tokens = excluded.total_tokens`).run(thread.id, reportedTotal);
 			if (delta > 0) {
-				db.prepare(`INSERT INTO companion_progress (id, total_tokens) VALUES (1, ?)
-					ON CONFLICT(id) DO UPDATE SET total_tokens = total_tokens + excluded.total_tokens`).run(delta);
+				db.prepare("UPDATE companion_roster SET total_tokens = total_tokens + ? WHERE capture_id = ?").run(delta, activeCaptureId);
 			}
 			db.prepare("INSERT OR IGNORE INTO incubator_state (id, token_remainder) VALUES (1, 0)").run();
 			const incubator = db.prepare("SELECT token_remainder FROM incubator_state WHERE id = 1").get() as { token_remainder: number };
@@ -537,6 +641,7 @@ export default async function plugin(bb: BbPluginApi) {
 			}
 			return { addedTokens: delta, eggSteps };
 		})();
+		if (progress.addedTokens > 0) await recordReachedEvolutions(db, bb, activeCaptureId);
 		if (progress.addedTokens > 0) bb.realtime.publish(COLLECTION_CHANGED, progress);
 	});
 
@@ -550,12 +655,14 @@ export default async function plugin(bb: BbPluginApi) {
 		instructions: "After personally verifying a successful commit, closed pull request, or completed ticket, call pokemon_record_milestone exactly once with the real source, reference, and title. Branches and BB worktrees are detected automatically." }));
 
 	const usage = ["Usage:", "  bb pokemon collection [--json]", `  bb pokemon starter <${starters.map((starter) => starter.id).join("|")}> [--json]`,
+		"  bb pokemon companion <capture-id> [--json]",
 		"  bb pokemon catch <branch_opened|commit_created|pr_closed|ticket_completed> --source <system> --reference <id> --title <title> [--url <url>] [--json]"].join("\n");
 	bb.cli.register({
 		name: "pokemon", summary: "Catch Pokemon for verified engineering milestones",
 		commands: [
 			{ name: "collection", summary: "Show caught Pokemon", usage: "bb pokemon collection [--json]" },
 			{ name: "starter", summary: "Choose a starter", usage: "bb pokemon starter <name> [--json]" },
+			{ name: "companion", summary: "Choose any caught Pokemon as your companion", usage: "bb pokemon companion <capture-id> [--json]" },
 			{ name: "catch", summary: "Reward a completed milestone", usage: usage.split("\n").at(-1)! },
 		],
 		async run(argv) {
@@ -568,6 +675,14 @@ export default async function plugin(bb: BbPluginApi) {
 			if (args[0] === "starter" && args[1] !== undefined && starters.some((starter) => starter.id === args[1])) {
 				const collection = await selectStarter(db, bb, args[1] as StarterId);
 				return { exitCode: 0, stdout: json ? JSON.stringify(collection) : `${collection.companion?.pokemonName ?? "Starter"} is now your companion.` };
+			}
+			if (args[0] === "companion" && args[1] !== undefined) {
+				try {
+					const collection = await selectCompanion(db, bb, args[1]);
+					return { exitCode: 0, stdout: json ? JSON.stringify(collection) : `${collection.companion?.pokemonName ?? "Pokemon"} is now your companion.` };
+				} catch (error) {
+					return { exitCode: 1, stderr: error instanceof Error ? error.message : String(error) };
+				}
 			}
 			if (args[0] === "catch" && milestoneKinds.includes(args[1] as MilestoneKind)) {
 				const value = (flag: string) => { const index = args.indexOf(flag); return index === -1 ? undefined : args[index + 1]; };

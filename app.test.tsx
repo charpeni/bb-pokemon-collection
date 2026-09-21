@@ -12,7 +12,7 @@ afterEach(() => {
 const collection: Collection = {
 	starter: "fennekin",
 	companion: {
-		starterId: "fennekin",
+		captureId: "shiny-1",
 		pokemonId: "fennekin",
 		pokemonName: "Fennekin",
 		pokemonNumber: 653,
@@ -24,7 +24,7 @@ const collection: Collection = {
 		experienceForNextLevel: 1_387,
 		totalTokens: 51_690_109,
 		tokensPerExperience: 5_000,
-		nextEvolution: { name: "Braixen", level: 16 },
+		nextEvolution: { name: "Braixen", method: "Reach level 16", level: 16, tokenTarget: null },
 	},
 	captures: [
 		{
@@ -133,6 +133,7 @@ describe("Pokemon collection app", () => {
 				collection_reset: () => collection,
 				demo_reward_add: () => collection,
 				starter_select: () => collection,
+				companion_select: () => collection,
 			},
 		});
 
@@ -162,6 +163,7 @@ describe("Pokemon collection app", () => {
 				collection_reset: () => { resets += 1; return { ...collection, starter: null, companion: null, captures: [], uniquePokemon: 0, totalCaptures: 0, shinyCaptures: 0 }; },
 				demo_reward_add: ({ kind }: { kind: "egg" | "shiny" }) => { demoRewards.push(kind); return collection; },
 				starter_select: () => collection,
+				companion_select: () => collection,
 			},
 		});
 
@@ -225,6 +227,7 @@ describe("Pokemon collection app", () => {
 				collection_reset: () => paginatedCollection,
 				demo_reward_add: () => paginatedCollection,
 				starter_select: () => paginatedCollection,
+				companion_select: () => paginatedCollection,
 			},
 		});
 

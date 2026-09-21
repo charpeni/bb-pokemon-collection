@@ -13,8 +13,13 @@ in the thread header and as a draggable overlay that becomes more active while
 agents are working.
 
 Agent usage awards one experience point per 5,000 tokens. Incubating eggs gain
-one step per 100 tokens. Developer tools in the collection panel can add a demo
-Egg or shiny Pokémon and reset local collection progress.
+one step per 100 tokens. Any caught or hatched Pokémon can become the active
+companion and keeps its own experience when swapped out. Level evolutions use
+the usual level threshold; item evolutions unlock at 500,000 tokens, other
+special evolutions at 750,000 tokens, and trade evolutions at 1,000,000 tokens.
+Every evolved form is also recorded as its own Pokédex catch. Developer tools
+in the collection panel can add a demo Egg or shiny Pokémon and reset local
+collection progress.
 
 ## Automatic Git detection
 
@@ -37,6 +42,7 @@ Local branch and worktree scanning remains limited to repositories known to BB. 
 ```sh
 bb pokemon collection --json
 bb pokemon starter fennekin
+bb pokemon companion <capture-id>
 bb pokemon catch commit_created --source git --reference abc123 --title "Save progress"
 ```
 

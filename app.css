@@ -169,6 +169,10 @@
   filter: brightness(1.1);
 }
 
+@media (max-width: 767px) {
+  .pokemon-floating-companion { display: none; }
+}
+
 .pokemon-bouncing {
   animation: pokemon-bounce 600ms ease-in-out infinite;
 }
@@ -178,4 +182,3 @@
   .pokemon-bouncing { animation: none; }
   .pokemon-egg { animation: none; }
 }
-

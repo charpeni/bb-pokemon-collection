@@ -37,6 +37,17 @@ export function useCollection() {
 		}
 	};
 
+	const selectCompanion = async (captureId: string) => {
+		try {
+			setCollection(await rpc.call("companion_select", { captureId }));
+			setError(null);
+			return true;
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : String(cause));
+			return false;
+		}
+	};
+
 	const addDemoReward = async (kind: "egg" | "shiny") => {
 		try {
 			setCollection(await rpc.call("demo_reward_add", { kind }));
@@ -48,5 +59,5 @@ export function useCollection() {
 		}
 	};
 
-	return { collection, error, selectStarter, resetCollection, addDemoReward };
+	return { collection, error, selectStarter, selectCompanion, resetCollection, addDemoReward };
 }

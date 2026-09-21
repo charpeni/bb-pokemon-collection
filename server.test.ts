@@ -109,13 +109,36 @@ describe("Pokemon Catcher server", () => {
 			sequence: 2,
 		});
 		await vi.waitFor(async () => {
-			const next = await harness.behavior.callRpc("collection_get", null) as { companion: { pokemonName: string; level: number } };
+			const next = await harness.behavior.callRpc("collection_get", null) as { companion: { pokemonName: string; level: number }; captures: Array<{ id: string; pokemonId: string; milestone: string; description: string; isEgg: boolean }> };
 			expect(next.companion).toMatchObject({ pokemonName: "Braixen", level: 16 });
+			expect(next.captures.find((capture) => capture.pokemonId === "braixen")).toMatchObject({
+				milestone: "companion_evolved",
+				description: "Evolved from Fennekin through the power of agentic coding!",
+				isEgg: false,
+			});
+		});
+		const { harness: reloadedHarness } = await harness.lifecycle.reload(plugin);
+		const afterReload = await reloadedHarness.behavior.callRpc("collection_get", null) as { captures: Array<{ pokemonId: string; isEgg: boolean; eggStepsRequired: number }> };
+		expect(afterReload.captures.find((capture) => capture.pokemonId === "braixen")).toMatchObject({ isEgg: false, eggStepsRequired: 0 });
+
+		const beforeSwap = await reloadedHarness.behavior.callRpc("collection_get", null) as { captures: Array<{ id: string; pokemonId: string }> };
+		const ponyta = beforeSwap.captures.find((capture) => capture.pokemonId === "ponyta")!;
+		const swapped = await reloadedHarness.behavior.callRpc("companion_select", { captureId: ponyta.id }) as { companion: { pokemonName: string; totalTokens: number } };
+		expect(swapped.companion).toMatchObject({ pokemonName: "Ponyta", totalTokens: 0 });
+		lastTokens = 5_000;
+		totalTokens += lastTokens;
+		await reloadedHarness.behavior.emitThreadEvent("experimental_thread.events", {
+			thread: makeThreadResponse({ id: "thr_tokens" }),
+			sequence: 3,
+		});
+		await vi.waitFor(async () => {
+			const next = await reloadedHarness.behavior.callRpc("collection_get", null) as { companion: { pokemonName: string; totalTokens: number } };
+			expect(next.companion).toMatchObject({ pokemonName: "Ponyta", totalTokens: 5_000 });
 		});
 
-		const reset = await harness.behavior.callRpc("collection_reset", null) as { starter: string | null; captures: unknown[]; companion: unknown };
+		const reset = await reloadedHarness.behavior.callRpc("collection_reset", null) as { starter: string | null; captures: unknown[]; companion: unknown };
 		expect(reset).toMatchObject({ starter: null, captures: [], companion: null });
-		await harness.lifecycle.dispose();
+		await reloadedHarness.lifecycle.dispose();
 	});
 
 	it("records concurrent reports of one milestone only once", async () => {

@@ -203,7 +203,7 @@ function SettingsPage() {
 }
 
 function CollectionPage() {
-  const { collection, error, selectStarter, resetCollection, addDemoReward } = useCollection();
+  const { collection, error, selectStarter, selectCompanion, resetCollection, addDemoReward } = useCollection();
   const [filters, setFilters] = useState(defaultCollectionFilters);
   const [page, setPage] = useState(1);
   const [starterDismissed, setStarterDismissed] = useState(false);
@@ -255,7 +255,7 @@ function CollectionPage() {
                     <div className="pokemon-exp-bar h-full rounded-full" style={{ width: `${levelProgress}%` }} />
                   </div>
                   <p className="mt-1.5 text-[11px] text-muted-foreground">
-                    {companion.nextEvolution === null ? `${companion.tokensPerExperience} tokens = 1 EXP` : `Evolves into ${companion.nextEvolution.name} at level ${companion.nextEvolution.level} · ${companion.tokensPerExperience} tokens = 1 EXP`}
+                    {companion.nextEvolution === null ? `${companion.tokensPerExperience} tokens = 1 EXP` : `Evolves into ${companion.nextEvolution.name}: ${companion.nextEvolution.method} · ${companion.tokensPerExperience} tokens = 1 EXP`}
                   </p>
                 </div>
               )}
@@ -417,7 +417,7 @@ function CollectionPage() {
             <div className="mt-3 rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No Pokemon match these filters.</div>
           ) : (
             <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {paginatedCaptures.captures.map((capture) => <CaptureCard key={capture.id} capture={capture} />)}
+              {paginatedCaptures.captures.map((capture) => <CaptureCard key={capture.id} capture={capture} activeCompanion={capture.id === companion?.captureId} onSelectCompanion={(captureId) => void selectCompanion(captureId)} />)}
             </div>
           )}
           <CollectionPagination page={paginatedCaptures.currentPage} total={visibleCaptures.length} onPageChange={setPage} />
