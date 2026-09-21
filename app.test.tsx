@@ -2,7 +2,7 @@
 import { cleanup, fireEvent } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Collection } from "./server";
+import type { Collection, PokemonSettings } from "./server";
 
 afterEach(() => {
 	cleanup();
@@ -97,6 +97,22 @@ const collection: Collection = {
 	shinyCaptures: 1,
 };
 
+const pokemonSettings: PokemonSettings = {
+	repositories: [
+		{ fullName: "acme/pokedex", htmlUrl: "https://github.com/acme/pokedex", private: false },
+		{ fullName: "acme/secret-lab", htmlUrl: "https://github.com/acme/secret-lab", private: true },
+	],
+	watchedRepositories: ["acme/pokedex"],
+	projectManagementTool: "shortcut",
+	connections: {
+		github: { authenticated: true, account: "misty", error: null },
+		shortcut: { authenticated: false, account: null, error: null },
+		jira: { authenticated: false, account: null, error: null },
+	},
+	jiraBaseUrl: "",
+	jiraEmail: "",
+};
+
 describe("Pokemon collection app", () => {
 	it("keeps starter selection inside the collection panel and lets users dismiss it", async () => {
 		const app = await loadPluginApp(() => import("./app"));
@@ -166,6 +182,35 @@ describe("Pokemon collection app", () => {
 		fireEvent.click(reset);
 		fireEvent.click(slot.getByRole("button", { name: "Reset everything" }));
 		await vi.waitFor(() => expect(resets).toBe(1));
+
+		slot.lifecycle.unmount();
+	});
+
+	it("opens a settings route with repository and project-management controls", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		const updates: Array<{ watchedRepositories: string[]; projectManagementTool: string }> = [];
+		const slot = renderSlot(app.navPanels[0]!, { subPath: "settings" }, {
+			rpc: {
+				settings_get: () => pokemonSettings,
+				settings_update: (input: { watchedRepositories: string[]; projectManagementTool: "shortcut" | "jira" | "github_issues" }) => {
+					updates.push(input);
+					return { ...pokemonSettings, ...input };
+				},
+				connection_save: () => pokemonSettings,
+				connection_disconnect: () => pokemonSettings,
+			},
+		});
+
+		expect(await slot.findByText("Pokemon Collection settings")).toBeTruthy();
+		expect(slot.getByRole("button", { name: "Disconnect GitHub" })).toBeTruthy();
+		fireEvent.click(slot.getByText("1 repository selected"));
+		fireEvent.click(slot.getByRole("checkbox", { name: /acme\/secret-lab/i }));
+		fireEvent.click(slot.getByRole("button", { name: /Jira/ }));
+		fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+		await vi.waitFor(() => expect(updates).toEqual([{
+			watchedRepositories: ["acme/pokedex", "acme/secret-lab"],
+			projectManagementTool: "jira",
+		}]));
 
 		slot.lifecycle.unmount();
 	});

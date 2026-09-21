@@ -164,4 +164,50 @@ describe("Pokemon Catcher server", () => {
 		expect((await harness.behavior.callRpc("collection_get", null) as { totalCaptures: number }).totalCaptures).toBe(1);
 		await harness.lifecycle.dispose();
 	});
+
+	it("verifies GitHub credentials, persists repository selection, and baselines remote events", async () => {
+		let eventBatch = 0;
+		let eventRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url === "https://api.github.com/user") return { ok: true, json: async () => ({ login: "misty" }) };
+			if (url.includes("/user/repos")) return { ok: true, json: async () => [{ full_name: "acme/pokedex", html_url: "https://github.com/acme/pokedex", private: false }] };
+			if (url.includes("/repos/acme/pokedex/events")) {
+				eventRequests += 1;
+				return { ok: true, json: async () => eventBatch === 0
+					? [{ id: "100", type: "WatchEvent", payload: {} }]
+					: [
+						{ id: "101", type: "PushEvent", payload: { commits: [{ sha: "abc123", message: "Complete the Pokedex" }] } },
+						{ id: "100", type: "WatchEvent", payload: {} },
+					] };
+			}
+			return { ok: false, status: 404, json: async () => ({}) };
+		}));
+		const { bb, harness } = createFakePluginHost({
+			pluginId: "pokemon-catcher",
+			hasHostEntry: true,
+			agentSkillIds: ["pokemon-catcher"],
+			settings: { githubToken: "secret-token" },
+		});
+		await plugin(bb);
+		expect(harness.inspection.registrations.settingsDescriptors.githubToken).toMatchObject({ secret: true });
+		const initial = await harness.behavior.callRpc("settings_get", null) as { repositories: Array<{ fullName: string }>; connections: { github: { account: string } } };
+		expect(initial).toMatchObject({ repositories: [{ fullName: "acme/pokedex" }], connections: { github: { account: "misty" } } });
+		await harness.behavior.callRpc("settings_update", { watchedRepositories: ["acme/pokedex"], projectManagementTool: "github_issues" });
+
+		const baseline = harness.behavior.runService("github-milestone-detector");
+		await vi.waitFor(() => expect(eventRequests).toBe(1));
+		baseline.controller.abort();
+		await baseline.done;
+		expect((await harness.behavior.callRpc("collection_get", null) as { totalCaptures: number }).totalCaptures).toBe(0);
+
+		eventBatch = 1;
+		const update = harness.behavior.runService("github-milestone-detector");
+		await vi.waitFor(async () => expect((await harness.behavior.callRpc("collection_get", null) as { totalCaptures: number }).totalCaptures).toBe(1));
+		update.controller.abort();
+		await update.done;
+		const collection = await harness.behavior.callRpc("collection_get", null) as { captures: Array<{ milestone: string; reference: string; title: string }> };
+		expect(collection.captures[0]).toMatchObject({ milestone: "commit_created", reference: "abc123", title: "Complete the Pokedex" });
+		await harness.lifecycle.dispose();
+	});
 });

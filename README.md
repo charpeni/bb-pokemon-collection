@@ -19,7 +19,17 @@ Egg or shiny Pokémon and reset local collection progress.
 
 The plugin scans repositories registered as BB project sources or active environments every 15 seconds. Existing branches and worktrees are baselined without rewards. New branches and worktrees created in BB or a terminal receive one idempotent reward.
 
-Only repositories known to BB are monitored. Arbitrary repositories elsewhere on the machine are intentionally excluded.
+## Settings and integrations
+
+Open the collection panel and use the gear button in its header to configure integrations.
+
+- Connect GitHub with a fine-grained personal access token restricted to the desired repositories and with only `Metadata: Read-only` repository permission, then select up to 100 repositories from the dropdown. No Contents, Issues, Pull requests, or write permission is required. The token is stored as a secret plugin setting and is never returned to the frontend.
+- Watched repositories are polled every 60 seconds. The first poll establishes a baseline; later GitHub events reward new branches, pushed commits, closed pull requests, and closed issues when GitHub Issues is the selected project-management tool.
+- Select Shortcut, Jira, or GitHub Issues as the project-management tool. Shortcut and Jira tokens are verified and stored as secret plugin settings. Jira also requires the Atlassian site URL and account email.
+
+The GitHub event feed exposes at most the latest 100 events. If the saved cursor falls outside that window, the plugin safely re-baselines instead of awarding old activity.
+
+Local branch and worktree scanning remains limited to repositories known to BB. Remote activity is limited to the GitHub repositories explicitly selected in settings.
 
 ## Commands
 

@@ -32,13 +32,48 @@ const collectionSchema = z.object({
 	uniquePokemon: z.number().int(), totalCaptures: z.number().int(), shinyCaptures: z.number().int(),
 });
 
+const projectManagementToolSchema = z.enum(["shortcut", "jira", "github_issues"]);
+const repositorySchema = z.object({
+	fullName: z.string(), htmlUrl: z.string(), private: z.boolean(),
+});
+const connectionSchema = z.object({
+	authenticated: z.boolean(), account: z.string().nullable(), error: z.string().nullable(),
+});
+const settingsSchema = z.object({
+	repositories: z.array(repositorySchema), watchedRepositories: z.array(z.string()),
+	projectManagementTool: projectManagementToolSchema,
+	connections: z.object({ github: connectionSchema, shortcut: connectionSchema, jira: connectionSchema }),
+	jiraBaseUrl: z.string(), jiraEmail: z.string(),
+});
+
 export type Collection = z.infer<typeof collectionSchema>;
 export type Capture = z.infer<typeof captureSchema>;
+export type PokemonSettings = z.infer<typeof settingsSchema>;
 export const rpcContract = defineRpcContract({
 	collection_get: { input: z.null(), output: collectionSchema },
 	collection_reset: { input: z.null(), output: collectionSchema },
 	demo_reward_add: { input: z.object({ kind: z.enum(["egg", "shiny"]) }).strict(), output: collectionSchema },
 	starter_select: { input: z.object({ starterId: starterIdSchema }), output: collectionSchema },
+	settings_get: { input: z.null(), output: settingsSchema },
+	settings_update: {
+		input: z.object({
+			watchedRepositories: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/u)).max(100),
+			projectManagementTool: projectManagementToolSchema,
+		}).strict(),
+		output: settingsSchema,
+	},
+	connection_save: {
+		input: z.discriminatedUnion("service", [
+			z.object({ service: z.literal("github"), token: z.string().trim().min(1).max(5_000) }).strict(),
+			z.object({ service: z.literal("shortcut"), token: z.string().trim().min(1).max(5_000) }).strict(),
+			z.object({
+				service: z.literal("jira"), token: z.string().trim().min(1).max(5_000),
+				baseUrl: z.url().refine((value) => new URL(value).protocol === "https:", "Jira site URL must use HTTPS"), email: z.email(),
+			}).strict(),
+		]),
+		output: settingsSchema,
+	},
+	connection_disconnect: { input: z.object({ service: z.enum(["github", "shortcut", "jira"]) }).strict(), output: settingsSchema },
 });
 const recordInputSchema = z.object({
 	milestone: milestoneSchema, source: z.string().trim().min(1).max(200), reference: z.string().trim().min(1).max(500),
@@ -90,6 +125,9 @@ function ensureTables(db: Database) {
 		CREATE TABLE IF NOT EXISTS git_detector_snapshots (
 			host_id TEXT NOT NULL, repo_id TEXT NOT NULL, snapshot_json TEXT NOT NULL,
 			updated_at TEXT NOT NULL, PRIMARY KEY (host_id, repo_id)
+		);
+		CREATE TABLE IF NOT EXISTS github_event_cursors (
+			repository TEXT PRIMARY KEY, event_id TEXT NOT NULL, updated_at TEXT NOT NULL
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS captures_event_key_unique
 			ON captures(event_key) WHERE event_key IS NOT NULL;
@@ -323,6 +361,98 @@ function sleep(ms: number, signal: AbortSignal) {
 	});
 }
 
+type ConnectionState = z.infer<typeof connectionSchema>;
+
+const disconnected = (): ConnectionState => ({ authenticated: false, account: null, error: null });
+
+async function githubConnection(token: string | undefined) {
+	if (token === undefined) return { connection: disconnected(), repositories: [] };
+	try {
+		const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" };
+		const userResponse = await fetch("https://api.github.com/user", { headers, signal: AbortSignal.timeout(10_000) });
+		if (!userResponse.ok) throw new Error(`GitHub returned ${userResponse.status}`);
+		const user = await userResponse.json() as { login?: unknown };
+		if (typeof user.login !== "string") throw new Error("GitHub returned an invalid profile");
+		const repositories: Array<{ full_name?: unknown; html_url?: unknown; private?: unknown }> = [];
+		for (let page = 1; page <= 10; page += 1) {
+			const response = await fetch(`https://api.github.com/user/repos?per_page=100&page=${page}&sort=full_name&affiliation=owner,collaborator,organization_member`, { headers, signal: AbortSignal.timeout(10_000) });
+			if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
+			const next = await response.json() as typeof repositories;
+			repositories.push(...next);
+			if (next.length < 100) break;
+		}
+		return {
+			connection: { authenticated: true, account: user.login, error: null },
+			repositories: repositories.flatMap((repository) => typeof repository.full_name === "string" && typeof repository.html_url === "string"
+				? [{ fullName: repository.full_name, htmlUrl: repository.html_url, private: repository.private === true }]
+				: []),
+		};
+	} catch (error) {
+		return { connection: { authenticated: false, account: null, error: error instanceof Error ? error.message : "GitHub authentication failed" }, repositories: [] };
+	}
+}
+
+async function shortcutConnection(token: string | undefined): Promise<ConnectionState> {
+	if (token === undefined) return disconnected();
+	try {
+		const response = await fetch("https://api.app.shortcut.com/api/v3/member", {
+			headers: { "Shortcut-Token": token }, signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) throw new Error(`Shortcut returned ${response.status}`);
+		const member = await response.json() as { profile?: { name?: unknown; mention_name?: unknown } };
+		const account = typeof member.profile?.name === "string" ? member.profile.name : typeof member.profile?.mention_name === "string" ? member.profile.mention_name : "Connected";
+		return { authenticated: true, account, error: null };
+	} catch (error) {
+		return { authenticated: false, account: null, error: error instanceof Error ? error.message : "Shortcut authentication failed" };
+	}
+}
+
+async function jiraConnection(token: string | undefined, baseUrl: string, email: string): Promise<ConnectionState> {
+	if (token === undefined || baseUrl === "" || email === "") return disconnected();
+	try {
+		const response = await fetch(`${baseUrl.replace(/\/$/u, "")}/rest/api/3/myself`, {
+			headers: { Accept: "application/json", Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}` },
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (!response.ok) throw new Error(`Jira returned ${response.status}`);
+		const user = await response.json() as { displayName?: unknown; emailAddress?: unknown };
+		const account = typeof user.displayName === "string" ? user.displayName : typeof user.emailAddress === "string" ? user.emailAddress : "Connected";
+		return { authenticated: true, account, error: null };
+	} catch (error) {
+		return { authenticated: false, account: null, error: error instanceof Error ? error.message : "Jira authentication failed" };
+	}
+}
+
+type GithubEvent = { id?: unknown; type?: unknown; payload?: Record<string, unknown> };
+type GithubMilestone = z.infer<typeof recordInputSchema> & { eventKey: string };
+
+function githubMilestones(repository: string, event: GithubEvent, projectManagementTool: z.infer<typeof projectManagementToolSchema>): GithubMilestone[] {
+	if (typeof event.id !== "string" || typeof event.type !== "string" || event.payload === undefined) return [];
+	const payload = event.payload;
+	if (event.type === "CreateEvent" && payload.ref_type === "branch" && typeof payload.ref === "string") {
+		return [{ milestone: "branch_opened", source: "GitHub", reference: payload.ref, title: `Opened ${payload.ref} in ${repository}`, url: `https://github.com/${repository}/tree/${encodeURIComponent(payload.ref)}`, eventKey: `github:${repository}:${event.id}` }];
+	}
+	if (event.type === "PushEvent" && Array.isArray(payload.commits)) {
+		return payload.commits.flatMap((commit) => {
+			if (typeof commit !== "object" || commit === null) return [];
+			const candidate = commit as { sha?: unknown; message?: unknown };
+			if (typeof candidate.sha !== "string") return [];
+			return [{ milestone: "commit_created" as const, source: "GitHub", reference: candidate.sha, title: typeof candidate.message === "string" ? candidate.message.split("\n")[0]!.slice(0, 500) : `Commit in ${repository}`, url: `https://github.com/${repository}/commit/${candidate.sha}`, eventKey: `github:${repository}:${event.id}:${candidate.sha}` }];
+		});
+	}
+	if (event.type === "PullRequestEvent" && payload.action === "closed" && typeof payload.pull_request === "object" && payload.pull_request !== null) {
+		const pullRequest = payload.pull_request as { number?: unknown; title?: unknown; html_url?: unknown };
+		if (typeof pullRequest.number !== "number") return [];
+		return [{ milestone: "pr_closed", source: "GitHub", reference: `${repository}#${pullRequest.number}`, title: typeof pullRequest.title === "string" ? pullRequest.title.slice(0, 500) : `Closed pull request #${pullRequest.number}`, ...(typeof pullRequest.html_url === "string" ? { url: pullRequest.html_url } : {}), eventKey: `github:${repository}:${event.id}` }];
+	}
+	if (projectManagementTool === "github_issues" && event.type === "IssuesEvent" && payload.action === "closed" && typeof payload.issue === "object" && payload.issue !== null) {
+		const issue = payload.issue as { number?: unknown; title?: unknown; html_url?: unknown; pull_request?: unknown };
+		if (typeof issue.number !== "number" || issue.pull_request !== undefined) return [];
+		return [{ milestone: "ticket_completed", source: "GitHub Issues", reference: `${repository}#${issue.number}`, title: typeof issue.title === "string" ? issue.title.slice(0, 500) : `Closed issue #${issue.number}`, ...(typeof issue.html_url === "string" ? { url: issue.html_url } : {}), eventKey: `github:${repository}:${event.id}` }];
+	}
+	return [];
+}
+
 
 function milestoneInput(event: GitSnapshotEvent): z.infer<typeof recordInputSchema> {
 	const branch = event.branch ?? "detached worktree";
@@ -334,14 +464,79 @@ function milestoneInput(event: GitSnapshotEvent): z.infer<typeof recordInputSche
 export default async function plugin(bb: BbPluginApi) {
 	const db = bb.storage.database();
 	ensureTables(db);
+	const settings = bb.settings.define({
+		githubToken: { type: "string", label: "GitHub personal access token", secret: true },
+		shortcutToken: { type: "string", label: "Shortcut API token", secret: true },
+		jiraApiToken: { type: "string", label: "Jira API token", secret: true },
+		jiraBaseUrl: { type: "string", label: "Jira site URL", default: "" },
+		jiraEmail: { type: "string", label: "Jira account email", default: "" },
+		projectManagementTool: { type: "select", label: "Project management tool", options: ["shortcut", "jira", "github_issues"], default: "shortcut" },
+	});
 	const host = bb.hosts.experimental_client({ contract: hostContract });
 	const lifecycle = new AbortController();
 	bb.onDispose(() => lifecycle.abort());
+
+	async function readSettings(): Promise<PokemonSettings> {
+		const values = await settings.get();
+		const watchedRepositories = await bb.storage.kv.get<string[]>("watchedRepositories") ?? [];
+		const [github, shortcut, jira] = await Promise.all([
+			githubConnection(values.githubToken),
+			shortcutConnection(values.shortcutToken),
+			jiraConnection(values.jiraApiToken, values.jiraBaseUrl, values.jiraEmail),
+		]);
+		return {
+			repositories: github.repositories,
+			watchedRepositories,
+			projectManagementTool: projectManagementToolSchema.parse(values.projectManagementTool),
+			connections: { github: github.connection, shortcut, jira },
+			jiraBaseUrl: values.jiraBaseUrl,
+			jiraEmail: values.jiraEmail,
+		};
+	}
 	bb.rpc.register(rpcContract, {
 		collection_get: () => readCollection(db, bb),
 		collection_reset: () => resetCollection(db, bb),
 		demo_reward_add: ({ kind }) => addDemoReward(db, bb, kind),
 		starter_select: ({ starterId }) => selectStarter(db, bb, starterId),
+		settings_get: () => readSettings(),
+		settings_update: async ({ watchedRepositories, projectManagementTool }) => {
+			const current = await bb.storage.kv.get<string[]>("watchedRepositories") ?? [];
+			const additions = watchedRepositories.filter((repository) => !current.includes(repository));
+			if (additions.length > 0) {
+				const available = (await githubConnection((await settings.get()).githubToken)).repositories.map((repository) => repository.fullName);
+				if (additions.some((repository) => !available.includes(repository))) throw new Error("One or more selected GitHub repositories are unavailable");
+			}
+			await Promise.all([
+				bb.storage.kv.set("watchedRepositories", [...new Set(watchedRepositories)].sort()),
+				settings.experimental_set({ projectManagementTool }),
+			]);
+			return readSettings();
+		},
+		connection_save: async (input) => {
+			if (input.service === "github") {
+				const result = await githubConnection(input.token);
+				if (!result.connection.authenticated) throw new Error(result.connection.error ?? "GitHub authentication failed");
+				await settings.experimental_set({ githubToken: input.token });
+			} else if (input.service === "shortcut") {
+				const result = await shortcutConnection(input.token);
+				if (!result.authenticated) throw new Error(result.error ?? "Shortcut authentication failed");
+				await settings.experimental_set({ shortcutToken: input.token });
+			} else {
+				const baseUrl = input.baseUrl.replace(/\/$/u, "");
+				const result = await jiraConnection(input.token, baseUrl, input.email);
+				if (!result.authenticated) throw new Error(result.error ?? "Jira authentication failed");
+				await settings.experimental_set({ jiraApiToken: input.token, jiraBaseUrl: baseUrl, jiraEmail: input.email });
+			}
+			return readSettings();
+		},
+		connection_disconnect: async ({ service }) => {
+			if (service === "github") {
+				await settings.experimental_set({ githubToken: null });
+				await bb.storage.kv.set("watchedRepositories", []);
+			} else if (service === "shortcut") await settings.experimental_set({ shortcutToken: null });
+			else await settings.experimental_set({ jiraApiToken: null });
+			return readSettings();
+		},
 	});
 
 	bb.events.on("experimental_thread.events", async ({ thread }) => {
@@ -467,5 +662,46 @@ export default async function plugin(bb: BbPluginApi) {
 	});
 	bb.events.on("thread.active", () => {
 		void runReconcile().catch((error) => { if (!lifecycle.signal.aborted) bb.log.warn(`Immediate Git milestone scan failed: ${error instanceof Error ? error.message : String(error)}`); });
+	});
+
+	async function reconcileGithub(signal: AbortSignal) {
+		const values = await settings.get();
+		if (values.githubToken === undefined) return;
+		const watchedRepositories = await bb.storage.kv.get<string[]>("watchedRepositories") ?? [];
+		if (watchedRepositories.length === 0) return;
+		const projectManagementTool = projectManagementToolSchema.parse(values.projectManagementTool);
+		const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${values.githubToken}`, "X-GitHub-Api-Version": "2022-11-28" };
+		for (const repository of watchedRepositories) {
+			if (signal.aborted) return;
+			const encodedRepository = repository.split("/").map(encodeURIComponent).join("/");
+			const response = await fetch(`https://api.github.com/repos/${encodedRepository}/events?per_page=100`, { headers, signal });
+			if (!response.ok) throw new Error(`GitHub events for ${repository} returned ${response.status}`);
+			const events = await response.json() as GithubEvent[];
+			const newestId = events.find((event) => typeof event.id === "string")?.id;
+			if (typeof newestId !== "string") continue;
+			const row = db.prepare("SELECT event_id FROM github_event_cursors WHERE repository = ?").get(repository) as { event_id: string } | undefined;
+			if (row !== undefined) {
+				const cursorIndex = events.findIndex((event) => event.id === row.event_id);
+				if (cursorIndex === -1) bb.log.warn(`GitHub event cursor for ${repository} fell outside the latest 100 events; baselining current activity.`);
+				else for (const event of events.slice(0, cursorIndex).reverse()) {
+					for (const milestone of githubMilestones(repository, event, projectManagementTool)) {
+						const { eventKey, ...input } = milestone;
+						await recordMilestone(db, bb, input, eventKey);
+					}
+				}
+			}
+			db.prepare(`INSERT INTO github_event_cursors (repository, event_id, updated_at) VALUES (?, ?, ?)
+				ON CONFLICT(repository) DO UPDATE SET event_id = excluded.event_id, updated_at = excluded.updated_at`)
+				.run(repository, newestId, new Date().toISOString());
+		}
+	}
+
+	bb.background.service("github-milestone-detector", {
+		async start(signal) {
+			while (!signal.aborted) {
+				try { await reconcileGithub(signal); } catch (error) { if (!signal.aborted) bb.log.warn(`GitHub milestone scan failed: ${error instanceof Error ? error.message : String(error)}`); }
+				await sleep(60_000, signal);
+			}
+		},
 	});
 }

@@ -7,7 +7,7 @@ import {
   useRealtime,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { Capture, Collection, rpcContract } from "./server";
+import type { Capture, Collection, PokemonSettings, rpcContract } from "./server";
 import { starters, type StarterId } from "./pokemon";
 import { Button } from "@/components/ui/button";
 import "./app.css";
@@ -269,6 +269,183 @@ function CaptureCard({ capture }: { capture: Capture }) {
         </div>
       </div>
     </article>
+  );
+}
+
+type ConnectionName = "github" | "shortcut" | "jira";
+
+function ConnectionBadge({ connection }: { connection: PokemonSettings["connections"][ConnectionName] }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${connection.authenticated ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-border bg-muted text-muted-foreground"}`}>
+      <span className={`size-1.5 rounded-full ${connection.authenticated ? "bg-emerald-500" : "bg-muted-foreground"}`} />
+      {connection.authenticated ? "Authenticated" : "Not authenticated"}
+    </span>
+  );
+}
+
+function SettingsPage() {
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const [settings, setSettings] = useState<PokemonSettings | null>(null);
+  const [watchedRepositories, setWatchedRepositories] = useState<string[]>([]);
+  const [projectManagementTool, setProjectManagementTool] = useState<PokemonSettings["projectManagementTool"]>("shortcut");
+  const [githubToken, setGithubToken] = useState("");
+  const [shortcutToken, setShortcutToken] = useState("");
+  const [jiraToken, setJiraToken] = useState("");
+  const [jiraBaseUrl, setJiraBaseUrl] = useState("");
+  const [jiraEmail, setJiraEmail] = useState("");
+  const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const acceptSettings = useCallback((next: PokemonSettings) => {
+    setSettings(next);
+    setWatchedRepositories(next.watchedRepositories);
+    setProjectManagementTool(next.projectManagementTool);
+    setJiraBaseUrl(next.jiraBaseUrl);
+    setJiraEmail(next.jiraEmail);
+    setError(null);
+  }, []);
+
+  useEffect(() => {
+    rpc.call("settings_get").then(acceptSettings, (cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, [acceptSettings, rpc]);
+
+  const connect = async (service: ConnectionName) => {
+    setPending(service);
+    setSaved(false);
+    try {
+      const next = service === "github"
+        ? await rpc.call("connection_save", { service, token: githubToken })
+        : service === "shortcut"
+          ? await rpc.call("connection_save", { service, token: shortcutToken })
+          : await rpc.call("connection_save", { service, token: jiraToken, baseUrl: jiraBaseUrl, email: jiraEmail });
+      acceptSettings(next);
+      if (service === "github") setGithubToken("");
+      else if (service === "shortcut") setShortcutToken("");
+      else setJiraToken("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const disconnect = async (service: ConnectionName) => {
+    setPending(service);
+    setSaved(false);
+    try {
+      acceptSettings(await rpc.call("connection_disconnect", { service }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const save = async () => {
+    setPending("settings");
+    setSaved(false);
+    try {
+      acceptSettings(await rpc.call("settings_update", { watchedRepositories, projectManagementTool }));
+      setSaved(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPending(null);
+    }
+  };
+
+  if (settings === null) return <div className="p-5 text-sm text-muted-foreground">Loading settings...</div>;
+  const inputClass = "h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  return (
+    <div className="h-full min-h-0 overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl space-y-5 p-4 md:p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div><h2 className="text-xl font-semibold">Pokemon Collection settings</h2><p className="mt-1 text-sm text-muted-foreground">Choose where engineering milestones come from.</p></div>
+          <Button variant="outline" size="sm" onClick={() => navigate.toPluginPanel("collection")}>Back to collection</Button>
+        </div>
+
+        {error === null ? null : <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h3 className="font-semibold">GitHub repositories</h3><p className="mt-1 text-sm text-muted-foreground">Connect GitHub, then choose repositories from the dropdown.</p></div>
+            <ConnectionBadge connection={settings.connections.github} />
+          </div>
+          {settings.connections.github.authenticated ? (
+            <div className="mt-4 flex justify-end"><Button variant="outline" size="sm" disabled={pending === "github"} onClick={() => void disconnect("github")}>Disconnect GitHub</Button></div>
+          ) : (
+            <div className="mt-4 rounded-lg border border-border bg-muted/40 p-4">
+              <h4 className="text-sm font-semibold">Create a fine-grained personal access token</h4>
+              <ol className="mt-2 list-decimal space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
+                <li>Under <strong className="text-foreground">Repository access</strong>, choose only the repositories Pokemon Collection may watch.</li>
+                <li>Under <strong className="text-foreground">Repository permissions</strong>, confirm <strong className="text-foreground">Metadata: Read-only</strong>. GitHub may enable it automatically.</li>
+                <li>No Contents, Issues, Pull requests, or write permissions are needed.</li>
+              </ol>
+              <Button className="mt-2 h-auto px-0 py-1" variant="link" size="sm" onClick={() => navigate.openUrl("https://github.com/settings/personal-access-tokens/new")}>Create token on GitHub</Button>
+              <div className="mt-3 flex gap-2"><input aria-label="GitHub fine-grained personal access token" type="password" autoComplete="off" className={inputClass} value={githubToken} onChange={(event) => setGithubToken(event.target.value)} placeholder="github_pat_..." /><Button disabled={githubToken.trim() === "" || pending === "github"} onClick={() => void connect("github")}>{pending === "github" ? "Checking..." : "Connect"}</Button></div>
+              <p className="mt-2 text-xs text-muted-foreground">Organization-owned repositories may require an administrator to approve the token.</p>
+            </div>
+          )}
+          {settings.connections.github.error === null ? null : <p className="mt-2 text-xs text-destructive">{settings.connections.github.error}</p>}
+          <div className="mt-5 border-t border-border pt-4">
+            <h4 className="text-sm font-semibold">Repositories to watch</h4>
+            {settings.connections.github.authenticated && settings.repositories.length === 0 ? <p className="mt-2 text-sm text-muted-foreground">No repositories are available to this token.</p> : null}
+            {!settings.connections.github.authenticated ? <p className="mt-2 text-sm text-muted-foreground">Connect GitHub to choose repositories.</p> : (
+              <details className="group relative mt-3">
+                <summary className="flex h-10 cursor-pointer list-none items-center justify-between rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+                  <span>{watchedRepositories.length === 0 ? "Select repositories" : `${watchedRepositories.length} ${watchedRepositories.length === 1 ? "repository" : "repositories"} selected`}</span>
+                  <svg viewBox="0 0 24 24" className="size-4 text-muted-foreground transition group-open:rotate-180" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                </summary>
+                <div className="absolute left-0 right-0 z-20 mt-1 rounded-lg border border-border bg-popover p-2 shadow-xl">
+                  <div className="mb-2 flex items-center justify-between border-b border-border px-1 pb-2">
+                    <span className="text-xs text-muted-foreground">Choose up to 100 repositories</span>
+                    <div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => setWatchedRepositories(settings.repositories.slice(0, 100).map((repository) => repository.fullName))}>Select all</Button><Button variant="ghost" size="sm" onClick={() => setWatchedRepositories([])}>Clear</Button></div>
+                  </div>
+                  <div className="grid max-h-64 gap-1 overflow-y-auto sm:grid-cols-2">
+                    {settings.repositories.map((repository) => (
+                      <label key={repository.fullName} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm hover:bg-accent">
+                        <input type="checkbox" checked={watchedRepositories.includes(repository.fullName)} onChange={(event) => setWatchedRepositories((current) => event.target.checked ? [...current, repository.fullName] : current.filter((value) => value !== repository.fullName))} />
+                        <span className="min-w-0 flex-1 truncate font-medium">{repository.fullName}</span>
+                        {repository.private ? <span className="text-[10px] uppercase text-muted-foreground">Private</span> : null}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <h3 className="font-semibold">Project management</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Choose the system that should provide completed-ticket milestones.</p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {([['shortcut', 'Shortcut'], ['jira', 'Jira'], ['github_issues', 'GitHub Issues']] as const).map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={projectManagementTool === value} className={`rounded-lg border p-3 text-left text-sm transition ${projectManagementTool === value ? "border-primary bg-primary/10" : "border-border hover:bg-accent"}`} onClick={() => setProjectManagementTool(value)}>
+                <strong className="block">{label}</strong>
+                <span className="mt-1 block text-xs text-muted-foreground">{settings.connections[value === "github_issues" ? "github" : value].authenticated ? "Authenticated" : "Not authenticated"}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold">Shortcut connection</h3><p className="mt-1 text-sm text-muted-foreground">Use an API token from Shortcut settings.</p></div><ConnectionBadge connection={settings.connections.shortcut} /></div>
+          {settings.connections.shortcut.authenticated ? <div className="mt-4 flex justify-end"><Button variant="outline" size="sm" disabled={pending === "shortcut"} onClick={() => void disconnect("shortcut")}>Disconnect Shortcut</Button></div> : <div className="mt-4 flex gap-2"><input aria-label="Shortcut API token" type="password" autoComplete="off" className={inputClass} value={shortcutToken} onChange={(event) => setShortcutToken(event.target.value)} /><Button disabled={shortcutToken.trim() === "" || pending === "shortcut"} onClick={() => void connect("shortcut")}>{pending === "shortcut" ? "Checking..." : "Connect"}</Button></div>}
+          {settings.connections.shortcut.error === null ? null : <p className="mt-2 text-xs text-destructive">{settings.connections.shortcut.error}</p>}
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-semibold">Jira connection</h3><p className="mt-1 text-sm text-muted-foreground">Use your Atlassian site URL, account email, and API token.</p></div><ConnectionBadge connection={settings.connections.jira} /></div>
+          {settings.connections.jira.authenticated ? <div className="mt-4 flex justify-end"><Button variant="outline" size="sm" disabled={pending === "jira"} onClick={() => void disconnect("jira")}>Disconnect Jira</Button></div> : <div className="mt-4 grid gap-2 sm:grid-cols-2"><input aria-label="Jira site URL" type="url" className={inputClass} value={jiraBaseUrl} onChange={(event) => setJiraBaseUrl(event.target.value)} placeholder="https://company.atlassian.net" /><input aria-label="Jira account email" type="email" className={inputClass} value={jiraEmail} onChange={(event) => setJiraEmail(event.target.value)} placeholder="you@company.com" /><input aria-label="Jira API token" type="password" autoComplete="off" className={`${inputClass} sm:col-span-2`} value={jiraToken} onChange={(event) => setJiraToken(event.target.value)} /><div className="sm:col-span-2 flex justify-end"><Button disabled={jiraToken.trim() === "" || jiraBaseUrl.trim() === "" || jiraEmail.trim() === "" || pending === "jira"} onClick={() => void connect("jira")}>{pending === "jira" ? "Checking..." : "Connect"}</Button></div></div>}
+          {settings.connections.jira.error === null ? null : <p className="mt-2 text-xs text-destructive">{settings.connections.jira.error}</p>}
+        </section>
+
+        <div className="flex items-center justify-end gap-3 pb-6">{saved ? <span className="text-sm text-emerald-600 dark:text-emerald-400">Settings saved</span> : null}<Button disabled={pending === "settings"} onClick={() => void save()}>{pending === "settings" ? "Saving..." : "Save settings"}</Button></div>
+      </div>
+    </div>
   );
 }
 
@@ -591,6 +768,22 @@ function ThreadCompanion({ threadId, isCompactViewport }: { threadId: string; is
   );
 }
 
+function CollectionPanel({ subPath }: { subPath: string }) {
+  return subPath === "settings" ? <SettingsPage /> : <CollectionPage />;
+}
+
+function CollectionHeaderActions() {
+  const navigate = useBbNavigate();
+  return (
+    <Button variant="ghost" size="icon" aria-label="Pokemon Collection settings" onClick={() => navigate.toPluginPanel("collection", { subPath: "settings" })}>
+      <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21H9.5v-.1A1.7 1.7 0 0 0 8.4 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2V9.5h.3A1.7 1.7 0 0 0 4 8.4a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.46 3.6l.06.06A1.7 1.7 0 0 0 8.4 4a1.7 1.7 0 0 0 1-.6A1.7 1.7 0 0 0 9.8 2.3V2h4.1v.3A1.7 1.7 0 0 0 15 4a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 8.4a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.3v4.1h-.3A1.7 1.7 0 0 0 19.4 15Z" />
+      </svg>
+    </Button>
+  );
+}
+
 export default definePluginApp((app) => {
   app.experimental_icons.register({ name: "PokemonCatcherPokeball", component: PokeballIcon });
   app.slots.navPanel({
@@ -598,7 +791,8 @@ export default definePluginApp((app) => {
     title: "Pokemon collection",
     icon: "PokemonCatcherPokeball",
     path: "collection",
-    component: CollectionPage,
+    component: CollectionPanel,
+    headerContent: CollectionHeaderActions,
   });
   app.slots.experimental_appOverlay({
     id: "floating-companion",
