@@ -49,8 +49,9 @@ const settingsSchema = z.object({
 	repositories: z.array(repositorySchema), watchedRepositories: z.array(z.string()),
 	projectManagementTool: projectManagementToolSchema,
 	connections: z.object({ github: connectionSchema, shortcut: connectionSchema, jira: connectionSchema }),
-	jiraBaseUrl: z.string(), jiraEmail: z.string(),
+	jiraBaseUrl: z.string(), jiraEmail: z.string(), showEvolutionAnimations: z.boolean(),
 });
+const preferencesSchema = settingsSchema.pick({ showEvolutionAnimations: true });
 
 export type Collection = z.infer<typeof collectionSchema>;
 export type Capture = z.infer<typeof captureSchema>;
@@ -63,10 +64,12 @@ export const rpcContract = defineRpcContract({
 	starter_select: { input: z.object({ starterId: starterIdSchema }), output: collectionSchema },
 	companion_select: { input: z.object({ captureId: z.string().uuid() }).strict(), output: collectionSchema },
 	settings_get: { input: z.null(), output: settingsSchema },
+	preferences_get: { input: z.null(), output: preferencesSchema },
 	settings_update: {
 		input: z.object({
 			watchedRepositories: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/u)).max(100),
 			projectManagementTool: projectManagementToolSchema,
+			showEvolutionAnimations: z.boolean(),
 		}).strict(),
 		output: settingsSchema,
 	},
@@ -89,7 +92,7 @@ const recordInputSchema = z.object({
 });
 const COLLECTION_CHANGED = "collection-changed";
 const TOKENS_PER_EXPERIENCE = 5000;
-const TOKENS_PER_EGG_STEP = 100;
+const TOKENS_PER_EGG_STEP = 2500;
 const STARTER_EXPERIENCE = 5 ** 3;
 const NATIONAL_DEX_SIZE = 1025;
 type Database = ReturnType<BbPluginApi["storage"]["database"]>;
@@ -360,7 +363,7 @@ async function recordReachedEvolutions(db: Database, bb: BbPluginApi, captureId:
 	const path = JSON.parse(row.evolution_path_json) as EvolutionStage[];
 	const state = companionState(origin, row.total_tokens, path);
 	const reachedIndex = path.findIndex((entry) => entry.number === state.pokemonNumber);
-	let changed = false;
+	const evolutions: Array<{ fromName: string; fromSpriteUrl: string; toName: string; toSpriteUrl: string; toNumber: number }> = [];
 	for (let index = 1; index <= reachedIndex; index += 1) {
 		const stage = path[index]!;
 		const previous = path[index - 1]!;
@@ -372,9 +375,17 @@ async function recordReachedEvolutions(db: Database, bb: BbPluginApi, captureId:
 		`).run(randomUUID(), `evolution:${captureId}:${stage.number}`, stage.id, stage.name, stage.number, captureId,
 			`${previous.name} evolved into ${stage.name}`, `Evolved from ${previous.name} through the power of agentic coding!`,
 			new Date().toISOString(), origin.isShiny ? 1 : 0, origin.rarity);
-		changed = changed || result.changes > 0;
+		if (result.changes > 0) {
+			evolutions.push({
+				fromName: previous.name,
+				fromSpriteUrl: spriteUrl(previous.number),
+				toName: stage.name,
+				toSpriteUrl: spriteUrl(stage.number),
+				toNumber: stage.number,
+			});
+		}
 	}
-	if (changed) bb.realtime.publish(COLLECTION_CHANGED, { reason: "companion_evolved" });
+	if (evolutions.length > 0) bb.realtime.publish(COLLECTION_CHANGED, { reason: "companion_evolved", captureId, evolutions });
 }
 
 async function resetCollection(db: Database, bb: BbPluginApi) {
@@ -532,6 +543,7 @@ export default async function plugin(bb: BbPluginApi) {
 		jiraBaseUrl: { type: "string", label: "Jira site URL", default: "" },
 		jiraEmail: { type: "string", label: "Jira account email", default: "" },
 		projectManagementTool: { type: "select", label: "Project management tool", options: ["shortcut", "jira", "github_issues"], default: "shortcut" },
+		showEvolutionAnimations: { type: "boolean", label: "Show evolution animations", default: true },
 	});
 	const host = bb.hosts.experimental_client({ contract: hostContract });
 	const lifecycle = new AbortController();
@@ -552,6 +564,7 @@ export default async function plugin(bb: BbPluginApi) {
 			connections: { github: github.connection, shortcut, jira },
 			jiraBaseUrl: values.jiraBaseUrl,
 			jiraEmail: values.jiraEmail,
+			showEvolutionAnimations: values.showEvolutionAnimations,
 		};
 	}
 	bb.rpc.register(rpcContract, {
@@ -561,7 +574,8 @@ export default async function plugin(bb: BbPluginApi) {
 		starter_select: ({ starterId }) => selectStarter(db, bb, starterId),
 		companion_select: ({ captureId }) => selectCompanion(db, bb, captureId),
 		settings_get: () => readSettings(),
-		settings_update: async ({ watchedRepositories, projectManagementTool }) => {
+		preferences_get: async () => ({ showEvolutionAnimations: (await settings.get()).showEvolutionAnimations }),
+		settings_update: async ({ watchedRepositories, projectManagementTool, showEvolutionAnimations }) => {
 			const current = await bb.storage.kv.get<string[]>("watchedRepositories") ?? [];
 			const additions = watchedRepositories.filter((repository) => !current.includes(repository));
 			if (additions.length > 0) {
@@ -570,8 +584,9 @@ export default async function plugin(bb: BbPluginApi) {
 			}
 			await Promise.all([
 				bb.storage.kv.set("watchedRepositories", [...new Set(watchedRepositories)].sort()),
-				settings.experimental_set({ projectManagementTool }),
+				settings.experimental_set({ projectManagementTool, showEvolutionAnimations }),
 			]);
+			bb.realtime.publish("preferences-changed", { showEvolutionAnimations });
 			return readSettings();
 		},
 		connection_save: async (input) => {

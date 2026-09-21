@@ -97,7 +97,7 @@ describe("Pokemon Catcher server", () => {
 		await vi.waitFor(async () => {
 			const next = await harness.behavior.callRpc("collection_get", null) as { companion: { totalTokens: number }; captures: Array<{ isEgg: boolean; eggSteps: number; isShiny: boolean }> };
 			expect(next.companion.totalTokens).toBe(10_000);
-			expect(next.captures.find((capture) => capture.isEgg)?.eggSteps).toBe(100);
+			expect(next.captures.find((capture) => capture.isEgg)?.eggSteps).toBe(4);
 			expect(next.captures.some((capture) => capture.isShiny)).toBe(true);
 		});
 
@@ -116,6 +116,10 @@ describe("Pokemon Catcher server", () => {
 				description: "Evolved from Fennekin through the power of agentic coding!",
 				isEgg: false,
 			});
+		});
+		expect(harness.inspection.realtimeSignals.findLast((signal) => signal.channel === "collection-changed" && (signal.payload as { reason?: string }).reason === "companion_evolved")?.payload).toMatchObject({
+			reason: "companion_evolved",
+			evolutions: [{ fromName: "Fennekin", toName: "Braixen", toNumber: 654 }],
 		});
 		const { harness: reloadedHarness } = await harness.lifecycle.reload(plugin);
 		const afterReload = await reloadedHarness.behavior.callRpc("collection_get", null) as { captures: Array<{ pokemonId: string; isEgg: boolean; eggStepsRequired: number }> };
@@ -274,7 +278,8 @@ describe("Pokemon Catcher server", () => {
 		expect(harness.inspection.registrations.settingsDescriptors.githubToken).toMatchObject({ secret: true });
 		const initial = await harness.behavior.callRpc("settings_get", null) as { repositories: Array<{ fullName: string }>; connections: { github: { account: string } } };
 		expect(initial).toMatchObject({ repositories: [{ fullName: "acme/pokedex" }], connections: { github: { account: "misty" } } });
-		await harness.behavior.callRpc("settings_update", { watchedRepositories: ["acme/pokedex"], projectManagementTool: "github_issues" });
+		await harness.behavior.callRpc("settings_update", { watchedRepositories: ["acme/pokedex"], projectManagementTool: "github_issues", showEvolutionAnimations: false });
+		expect(await harness.behavior.callRpc("preferences_get", null)).toEqual({ showEvolutionAnimations: false });
 
 		const baseline = harness.behavior.runService("github-milestone-detector");
 		await vi.waitFor(() => expect(eventRequests).toBe(1));

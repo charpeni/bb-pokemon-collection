@@ -106,6 +106,7 @@ const pokemonSettings: PokemonSettings = {
 	],
 	watchedRepositories: ["acme/pokedex"],
 	projectManagementTool: "shortcut",
+	showEvolutionAnimations: true,
 	connections: {
 		github: { authenticated: true, account: "misty", error: null },
 		shortcut: { authenticated: false, account: null, error: null },
@@ -235,6 +236,52 @@ describe("Pokemon collection app", () => {
 		slot.lifecycle.unmount();
 	});
 
+	it("shows a skippable classic evolution experience and honors the saved preference", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		const overlay = app.appOverlays.find(({ id }) => id === "evolution-experience")!;
+		const evolutionSignal = {
+			reason: "companion_evolved",
+			captureId: "shiny-1",
+			evolutions: [{
+				fromName: "Fennekin",
+				fromSpriteUrl: "https://example.invalid/fennekin.png",
+				toName: "Braixen",
+				toSpriteUrl: "https://example.invalid/braixen.png",
+				toNumber: 654,
+			}],
+		};
+		let preferenceReads = 0;
+		const slot = renderSlot(overlay, {}, {
+			rpc: {
+				preferences_get: () => { preferenceReads += 1; return { showEvolutionAnimations: true }; },
+			},
+		});
+
+		await vi.waitFor(() => expect(preferenceReads).toBe(1));
+		await slot.behavior.emitRealtime("collection-changed", evolutionSignal);
+
+		const dialog = await slot.findByRole("dialog");
+		expect(dialog.textContent).toContain("Fennekin is evolving!");
+		fireEvent.click(slot.getByRole("button", { name: "Skip" }));
+		await vi.waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
+		slot.lifecycle.unmount();
+
+		let showEvolutionAnimations = true;
+		preferenceReads = 0;
+		const disabledSlot = renderSlot(overlay, {}, {
+			rpc: {
+				preferences_get: () => { preferenceReads += 1; return { showEvolutionAnimations }; },
+			},
+		});
+		await vi.waitFor(() => expect(preferenceReads).toBe(1));
+		showEvolutionAnimations = false;
+		await disabledSlot.behavior.emitRealtime("preferences-changed", { showEvolutionAnimations: false });
+		await vi.waitFor(() => expect(preferenceReads).toBe(2));
+		await disabledSlot.behavior.emitRealtime("collection-changed", evolutionSignal);
+		expect(disabledSlot.queryByRole("dialog")).toBeNull();
+		disabledSlot.lifecycle.unmount();
+	});
+
 	it("paginates filtered Pokedex entries and returns to the first page when filters change", async () => {
 		const template = collection.captures[1]!;
 		const paginatedCollection: Collection = {
@@ -285,11 +332,11 @@ describe("Pokemon collection app", () => {
 
 	it("opens a settings route with repository and project-management controls", async () => {
 		const app = await loadPluginApp(() => import("./app"));
-		const updates: Array<{ watchedRepositories: string[]; projectManagementTool: string }> = [];
+		const updates: Array<{ watchedRepositories: string[]; projectManagementTool: string; showEvolutionAnimations: boolean }> = [];
 		const slot = renderSlot(app.navPanels[0]!, { subPath: "settings" }, {
 			rpc: {
 				settings_get: () => pokemonSettings,
-				settings_update: (input: { watchedRepositories: string[]; projectManagementTool: "shortcut" | "jira" | "github_issues" }) => {
+				settings_update: (input: { watchedRepositories: string[]; projectManagementTool: "shortcut" | "jira" | "github_issues"; showEvolutionAnimations: boolean }) => {
 					updates.push(input);
 					return { ...pokemonSettings, ...input };
 				},
@@ -302,11 +349,13 @@ describe("Pokemon collection app", () => {
 		expect(slot.getByRole("button", { name: "Disconnect GitHub" })).toBeTruthy();
 		fireEvent.click(slot.getByText("1 repository selected"));
 		fireEvent.click(slot.getByRole("checkbox", { name: /acme\/secret-lab/i }));
+		fireEvent.click(slot.getByRole("checkbox", { name: "Show evolution animations" }));
 		fireEvent.click(slot.getByRole("button", { name: /Jira/ }));
 		fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
 		await vi.waitFor(() => expect(updates).toEqual([{
 			watchedRepositories: ["acme/pokedex", "acme/secret-lab"],
 			projectManagementTool: "jira",
+			showEvolutionAnimations: false,
 		}]));
 
 		slot.lifecycle.unmount();

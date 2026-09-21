@@ -9,6 +9,7 @@ import { starters } from "./pokemon";
 import { Button } from "@/components/ui/button";
 import { CaptureCard } from "./components/pokemon/capture-card";
 import { EvolutionSprite, FloatingCompanion, ThreadCompanion } from "./components/pokemon/companions";
+import { EvolutionExperience } from "./components/pokemon/evolution-experience";
 import { CollectionFilterControls, defaultCollectionFilters, filterCaptures } from "./components/pokemon/collection-filters";
 import { CollectionPagination, paginateCaptures } from "./components/pokemon/collection-pagination";
 import { Modal } from "./components/pokemon/modal";
@@ -42,6 +43,7 @@ function SettingsPage() {
   const [settings, setSettings] = useState<PokemonSettings | null>(null);
   const [watchedRepositories, setWatchedRepositories] = useState<string[]>([]);
   const [projectManagementTool, setProjectManagementTool] = useState<PokemonSettings["projectManagementTool"]>("shortcut");
+  const [showEvolutionAnimations, setShowEvolutionAnimations] = useState(true);
   const [githubToken, setGithubToken] = useState("");
   const [shortcutToken, setShortcutToken] = useState("");
   const [jiraToken, setJiraToken] = useState("");
@@ -55,6 +57,7 @@ function SettingsPage() {
     setSettings(next);
     setWatchedRepositories(next.watchedRepositories);
     setProjectManagementTool(next.projectManagementTool);
+    setShowEvolutionAnimations(next.showEvolutionAnimations);
     setJiraBaseUrl(next.jiraBaseUrl);
     setJiraEmail(next.jiraEmail);
     setError(null);
@@ -100,7 +103,7 @@ function SettingsPage() {
     setPending("settings");
     setSaved(false);
     try {
-      acceptSettings(await rpc.call("settings_update", { watchedRepositories, projectManagementTool }));
+      acceptSettings(await rpc.call("settings_update", { watchedRepositories, projectManagementTool, showEvolutionAnimations }));
       setSaved(true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -120,6 +123,15 @@ function SettingsPage() {
         </div>
 
         {error === null ? null : <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+
+        <section className="rounded-xl border border-border bg-card p-5">
+          <h3 className="font-semibold">Evolution experience</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Choose whether companion evolutions interrupt the screen with the classic animation and chime.</p>
+          <label className="mt-4 flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border bg-muted/30 p-3">
+            <span><strong className="block text-sm">Show evolution animations</strong><span className="mt-0.5 block text-xs text-muted-foreground">You can still skip any animation with Escape, the close button, or Skip.</span></span>
+            <input aria-label="Show evolution animations" type="checkbox" className="size-4 accent-primary" checked={showEvolutionAnimations} onChange={(event) => setShowEvolutionAnimations(event.target.checked)} />
+          </label>
+        </section>
 
         <section className="rounded-xl border border-border bg-card p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -393,7 +405,7 @@ function CollectionPage() {
             <div className="mt-3 rounded-lg border border-dashed border-violet-400/40 bg-violet-400/5 p-8 text-center">
               <div className="pokemon-egg pokemon-egg-small mx-auto" aria-hidden="true" />
               <p className="mt-4 text-sm font-medium text-foreground">No Eggs are incubating.</p>
-              <p className="mt-1 text-xs text-muted-foreground">Rare encounters appear here as mystery Eggs. Every 100 tokens adds one step.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Rare encounters appear here as mystery Eggs. Every 2,500 tokens adds one step.</p>
             </div>
           ) : (
             <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -459,6 +471,10 @@ export default definePluginApp((app) => {
   app.slots.experimental_appOverlay({
     id: "floating-companion",
     component: FloatingCompanion,
+  });
+  app.slots.experimental_appOverlay({
+    id: "evolution-experience",
+    component: EvolutionExperience,
   });
   app.slots.experimental_threadHeaderAction({
     id: "companion",
