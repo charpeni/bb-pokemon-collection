@@ -103,11 +103,14 @@ export function rarityForEncounterChance(chance: number): "common" | "uncommon" 
 	return "rare";
 }
 
-const starterNumbers = new Set<number>(starters.map((starter) => starter.number));
+const starterFamilyNumbers = new Set<number>([
+	...starters.map((starter) => starter.number),
+	...Object.values(starterEvolutionChains).flatMap((chain) => chain.map((evolution) => evolution.number)),
+]);
 
 export function rarityForPokemon(number: number, encounterChance: number | null, isLegendary: boolean, isMythical: boolean): PokemonRarity {
 	if (isLegendary || isMythical) return "legendary";
-	if (starterNumbers.has(number)) return "rare";
+	if (starterFamilyNumbers.has(number)) return "rare";
 	return encounterChance === null ? "common" : rarityForEncounterChance(encounterChance);
 }
 
@@ -151,7 +154,7 @@ function ensureTables(db: Database) {
 				WHEN milestone = 'starter_selected' OR hatched_at IS NOT NULL OR egg_steps_required > 0 THEN egg_steps_required
 				ELSE 255 * (COALESCE((SELECT hatch_counter FROM pokemon_details WHERE pokemon_number = captures.pokemon_number), 20) + 1)
 			END
-		WHERE pokemon_number IN (${[...starterNumbers].join(",")}) AND rarity != 'legendary'
+		WHERE pokemon_number IN (${[...starterFamilyNumbers].join(",")}) AND rarity != 'legendary'
 	`);
 }
 

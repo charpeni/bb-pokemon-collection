@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import plugin, { chooseFallbackPokemonNumber, rarityForEncounterChance, rarityForPokemon } from "./server";
+import { starterEvolutionChains, starters } from "./pokemon";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,9 +15,13 @@ describe("Pokemon Catcher server", () => {
 		]);
 	});
 
-	it("classifies starters independently from encounter rarity", () => {
-		expect(rarityForPokemon(1, 100, false, false)).toBe("rare");
-		expect(rarityForPokemon(906, null, false, false)).toBe("rare");
+	it("classifies starter evolution families independently from encounter rarity", () => {
+		const familyNumbers = [
+			...starters.map((starter) => starter.number),
+			...Object.values(starterEvolutionChains).flatMap((chain) => chain.map((evolution) => evolution.number)),
+		];
+		expect(familyNumbers).toHaveLength(81);
+		expect(familyNumbers.every((number) => rarityForPokemon(number, 100, false, false) === "rare")).toBe(true);
 		expect(rarityForPokemon(25, 100, false, false)).toBe("common");
 		expect(rarityForPokemon(25, 5, false, false)).toBe("rare");
 		expect(rarityForPokemon(144, null, true, false)).toBe("legendary");
