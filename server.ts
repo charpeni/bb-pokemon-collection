@@ -4,7 +4,7 @@ import { z } from "zod";
 import { hostContract } from "./host-contract";
 import { diffGitSnapshots, type GitRepoSnapshot, type GitSnapshotEvent } from "./git-detector";
 import {
-	animatedSpriteUrl, milestoneKinds, pokemon, spriteUrl, starterEvolutionChains, starters,
+	animatedSpriteUrl, cryUrl, milestoneKinds, pokemon, spriteUrl, starterEvolutionChains, starters,
 	type MilestoneKind, type StarterId,
 } from "./pokemon";
 
@@ -13,6 +13,7 @@ const milestoneSchema = z.enum(milestoneKinds);
 const captureSchema = z.object({
 	id: z.string(), pokemonId: z.string(), pokemonName: z.string(), pokemonNumber: z.number().int(),
 	spriteUrl: z.string().nullable(), shinySpriteUrl: z.string().nullable(), animatedSpriteUrl: z.string().nullable(),
+	cryUrl: z.string(),
 	isShiny: z.boolean(), heightDecimeters: z.number().int(), weightHectograms: z.number().int(),
 	types: z.array(z.string()), flavorText: z.string().nullable(), rarity: z.string(), isEgg: z.boolean(),
 	eggSteps: z.number().int(), eggStepsRequired: z.number().int(), hatchedAt: z.string().nullable(),
@@ -71,7 +72,7 @@ function ensureTables(db: Database) {
 			pokemon_number INTEGER PRIMARY KEY, pokemon_id TEXT NOT NULL, pokemon_name TEXT NOT NULL,
 			artwork_url TEXT, height_decimeters INTEGER NOT NULL, weight_hectograms INTEGER NOT NULL,
 			types_json TEXT NOT NULL, flavor_text TEXT, fetched_at TEXT NOT NULL, sprite_url TEXT,
-			shiny_sprite_url TEXT, animated_sprite_url TEXT, hatch_counter INTEGER NOT NULL DEFAULT 0,
+			shiny_sprite_url TEXT, animated_sprite_url TEXT, cry_url TEXT, hatch_counter INTEGER NOT NULL DEFAULT 0,
 			is_legendary INTEGER NOT NULL DEFAULT 0, is_mythical INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS captures (
@@ -93,6 +94,8 @@ function ensureTables(db: Database) {
 		CREATE UNIQUE INDEX IF NOT EXISTS captures_event_key_unique
 			ON captures(event_key) WHERE event_key IS NOT NULL;
 	`);
+	const detailColumns = db.prepare("PRAGMA table_info(pokemon_details)").all() as Array<{ name: string }>;
+	if (!detailColumns.some((column) => column.name === "cry_url")) db.exec("ALTER TABLE pokemon_details ADD COLUMN cry_url TEXT");
 }
 
 function nullableString(value: unknown) {
@@ -105,6 +108,7 @@ function rowToCapture(row: Record<string, unknown>): Capture {
 		id: String(row.id), pokemonId: String(row.pokemon_id), pokemonName: String(row.pokemon_name), pokemonNumber: number,
 		spriteUrl: nullableString(row.sprite_url) ?? spriteUrl(number), shinySpriteUrl: nullableString(row.shiny_sprite_url) ?? spriteUrl(number, true),
 		animatedSpriteUrl: nullableString(row.animated_sprite_url) ?? animatedSpriteUrl(number), isShiny: Boolean(row.is_shiny),
+		cryUrl: nullableString(row.cry_url) ?? cryUrl(number),
 		heightDecimeters: Number(row.height_decimeters ?? 0), weightHectograms: Number(row.weight_hectograms ?? 0),
 		types: JSON.parse(String(row.types_json ?? "[]")) as string[], flavorText: nullableString(row.flavor_text),
 		rarity: String(row.rarity ?? "common"), isEgg: Number(row.egg_steps_required ?? 0) > 0 && row.hatched_at === null,
@@ -119,7 +123,7 @@ function rowToCapture(row: Record<string, unknown>): Capture {
 
 function readCaptures(db: Database) {
 	return db.prepare(`
-		SELECT c.*, d.sprite_url, d.shiny_sprite_url, d.animated_sprite_url,
+		SELECT c.*, d.sprite_url, d.shiny_sprite_url, d.animated_sprite_url, d.cry_url,
 			d.height_decimeters, d.weight_hectograms, d.types_json, d.flavor_text
 		FROM captures c LEFT JOIN pokemon_details d ON d.pokemon_number = c.pokemon_number ORDER BY c.caught_at DESC
 	`).all().map((row) => rowToCapture(row as Record<string, unknown>));
@@ -129,16 +133,18 @@ async function fetchPokemonDetails(candidate: PokemonCandidate) {
 	let height = 0; let weight = 0; let types: string[] = []; let flavorText: string | null = null;
 	let hatchCounter = 0; let isLegendary = false; let isMythical = false;
 	let id = candidate.id; let name = candidate.name;
+	let resolvedCryUrl = cryUrl(candidate.number);
 	try {
 		const [pokemonResponse, speciesResponse] = await Promise.all([
 			fetch(`https://pokeapi.co/api/v2/pokemon/${candidate.number}`, { signal: AbortSignal.timeout(5000) }),
 			fetch(`https://pokeapi.co/api/v2/pokemon-species/${candidate.number}`, { signal: AbortSignal.timeout(5000) }),
 		]);
 		if (pokemonResponse.ok) {
-			const data = await pokemonResponse.json() as { id?: number; name?: string; height?: number; weight?: number; types?: Array<{ type?: { name?: string } }> };
+			const data = await pokemonResponse.json() as { id?: number; name?: string; height?: number; weight?: number; types?: Array<{ type?: { name?: string } }>; cries?: { latest?: string; legacy?: string } };
 			id = data.name ?? candidate.id; name = data.name === undefined ? candidate.name : formatPokemonName(data.name);
 			height = data.height ?? 0; weight = data.weight ?? 0;
 			types = data.types?.flatMap((entry) => entry.type?.name === undefined ? [] : [entry.type.name]) ?? [];
+			resolvedCryUrl = data.cries?.latest ?? data.cries?.legacy ?? resolvedCryUrl;
 		}
 		if (speciesResponse.ok) {
 			const data = await speciesResponse.json() as { hatch_counter?: number; is_legendary?: boolean; is_mythical?: boolean; flavor_text_entries?: Array<{ flavor_text?: string; language?: { name?: string } }> };
@@ -146,7 +152,7 @@ async function fetchPokemonDetails(candidate: PokemonCandidate) {
 			hatchCounter = data.hatch_counter ?? 0; isLegendary = data.is_legendary ?? false; isMythical = data.is_mythical ?? false;
 		}
 	} catch {}
-	return { id, name, height, weight, types, flavorText, hatchCounter, isLegendary, isMythical };
+	return { id, name, height, weight, types, flavorText, hatchCounter, isLegendary, isMythical, cryUrl: resolvedCryUrl };
 }
 
 async function ensurePokemonDetails(db: Database, candidate: PokemonCandidate) {
@@ -155,12 +161,12 @@ async function ensurePokemonDetails(db: Database, candidate: PokemonCandidate) {
 	db.prepare(`
 		INSERT OR IGNORE INTO pokemon_details (
 			pokemon_number, pokemon_id, pokemon_name, artwork_url, height_decimeters, weight_hectograms,
-			types_json, flavor_text, fetched_at, sprite_url, shiny_sprite_url, animated_sprite_url,
+			types_json, flavor_text, fetched_at, sprite_url, shiny_sprite_url, animated_sprite_url, cry_url,
 			hatch_counter, is_legendary, is_mythical
-		) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`).run(candidate.number, details.id, details.name, details.height, details.weight, JSON.stringify(details.types),
 		details.flavorText, new Date().toISOString(), spriteUrl(candidate.number), spriteUrl(candidate.number, true), animatedSpriteUrl(candidate.number),
-		details.hatchCounter, details.isLegendary ? 1 : 0, details.isMythical ? 1 : 0);
+		details.cryUrl, details.hatchCounter, details.isLegendary ? 1 : 0, details.isMythical ? 1 : 0);
 }
 
 async function fetchEncounter(number: number, eventKey: string) {

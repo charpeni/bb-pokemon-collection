@@ -114,6 +114,20 @@ function animatedSpriteUrl(number: number): string | null {
   return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/versions/generation-v/black-white/animated/${number}.gif`;
 }
 
+let activeCry: HTMLAudioElement | null = null;
+
+function playPokemonCry(url: string) {
+  activeCry?.pause();
+  const audio = new Audio(url);
+  activeCry = audio;
+  audio.addEventListener("ended", () => {
+    if (activeCry === audio) activeCry = null;
+  }, { once: true });
+  void audio.play().catch(() => {
+    if (activeCry === audio) activeCry = null;
+  });
+}
+
 function PixelStarter({ id, running = false, size = "large" }: { id: StarterId; running?: boolean; size?: "small" | "large" }) {
   const starter = starters.find((candidate) => candidate.id === id)!;
   const pixels = spritePatterns[starter.number % spritePatterns.length]!;
@@ -199,12 +213,20 @@ function CaptureCard({ capture }: { capture: Capture }) {
         {capture.isEgg ? (
           <div className="pokemon-egg" role="img" aria-label="Mystery Pokemon egg" />
         ) : (
-          <img
-            src={displaySprite}
-            alt={capture.pokemonName}
-            loading="lazy"
-            className="h-full w-full max-w-24 object-contain [image-rendering:pixelated] transition-transform duration-300 group-hover:scale-125"
-          />
+          <button
+            type="button"
+            aria-label={`Play ${capture.pokemonName}'s cry`}
+            title={`Play ${capture.pokemonName}'s cry`}
+            className="h-full w-full max-w-24 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => playPokemonCry(capture.cryUrl)}
+          >
+            <img
+              src={displaySprite}
+              alt=""
+              loading="lazy"
+              className="h-full w-full object-contain [image-rendering:pixelated] transition-transform duration-300 group-hover:scale-125"
+            />
+          </button>
         )}
       </div>
       <div className="p-4">

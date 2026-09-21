@@ -22,7 +22,7 @@ describe("Pokemon Catcher server", () => {
 				version_details: [{ version: { name: "platinum" }, encounter_details: [{ chance: 15, min_level: 8, max_level: 10, method: { name: "walk" } }] }],
 			}] };
 			if (url.includes("pokemon-species")) return { ok: true, json: async () => ({ hatch_counter: 20, is_legendary: false, is_mythical: false, flavor_text_entries: [] }) };
-			return { ok: true, json: async () => ({ name: "testmon", height: 12, weight: 34, types: [{ type: { name: "grass" } }] }) };
+			return { ok: true, json: async () => ({ name: "testmon", height: 12, weight: 34, types: [{ type: { name: "grass" } }], cries: { latest: "https://example.invalid/testmon.ogg" } }) };
 		}));
 		const { bb, harness } = createFakePluginHost({ pluginId: "pokemon-catcher", hasHostEntry: true, agentSkillIds: ["pokemon-catcher"] });
 		await plugin(bb);
@@ -32,6 +32,7 @@ describe("Pokemon Catcher server", () => {
 		const result = await harness.behavior.callRpc("collection_get", null) as { captures: Array<Record<string, unknown>> };
 		expect(result.captures[0]).toMatchObject({
 			pokemonId: "testmon", pokemonName: "Testmon", rarity: "uncommon",
+			cryUrl: "https://example.invalid/testmon.ogg",
 			encounterLocation: "Test Grove", encounterVersion: "Platinum", encounterMethod: "Walk",
 		});
 		await harness.lifecycle.dispose();

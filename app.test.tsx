@@ -4,7 +4,10 @@ import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Collection } from "./server";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	vi.unstubAllGlobals();
+});
 
 const collection: Collection = {
 	starter: "fennekin",
@@ -32,6 +35,7 @@ const collection: Collection = {
 			spriteUrl: "https://example.invalid/dratini.png",
 			shinySpriteUrl: "https://example.invalid/dratini-shiny.png",
 			animatedSpriteUrl: "https://example.invalid/dratini.gif",
+			cryUrl: "https://example.invalid/dratini.ogg",
 			isShiny: false,
 			heightDecimeters: 18,
 			weightHectograms: 33,
@@ -63,6 +67,7 @@ const collection: Collection = {
 			spriteUrl: "https://example.invalid/ponyta.png",
 			shinySpriteUrl: "https://example.invalid/ponyta-shiny.png",
 			animatedSpriteUrl: "https://example.invalid/ponyta.gif",
+			cryUrl: "https://example.invalid/ponyta.ogg",
 			isShiny: true,
 			heightDecimeters: 10,
 			weightHectograms: 300,
@@ -122,6 +127,14 @@ describe("Pokemon collection app", () => {
 	});
 
 	it("preserves the original trainer-log collection UX", async () => {
+		const play = vi.fn(() => Promise.resolve());
+		class MockAudio {
+			play = play;
+			pause = vi.fn();
+			addEventListener = vi.fn();
+			constructor(readonly src: string) {}
+		}
+		vi.stubGlobal("Audio", MockAudio);
 		const app = await loadPluginApp(() => import("./app"));
 		const demoRewards: string[] = [];
 		let resets = 0;
@@ -141,6 +154,8 @@ describe("Pokemon collection app", () => {
 		expect(slot.getByRole("button", { name: "✨ Shiny (1)" })).toBeTruthy();
 		expect(slot.getByRole("button", { name: "Developer tools" })).toBeTruthy();
 		expect(slot.getByText("Mt. Coronet · Lv. 15 · walk · platinum")).toBeTruthy();
+		fireEvent.click(slot.getByRole("button", { name: "Play Ponyta's cry" }));
+		expect(play).toHaveBeenCalledOnce();
 
 		fireEvent.click(slot.getByRole("button", { name: "Developer tools" }));
 		fireEvent.click(slot.getByRole("button", { name: "Add demo Egg" }));

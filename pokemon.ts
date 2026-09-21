@@ -88,3 +88,7 @@ export function spriteUrl(number: number, shiny = false) {
 export function animatedSpriteUrl(number: number) {
 	return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/showdown/${number}.gif`;
 }
+
+export function cryUrl(number: number) {
+	return `https://raw.githubusercontent.com/PokeAPI/cries/main/cries/pokemon/latest/${number}.ogg`;
+}
