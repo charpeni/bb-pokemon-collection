@@ -8,7 +8,7 @@ import type { PokemonSettings, rpcContract } from "./server";
 import { starters } from "./pokemon";
 import { Button } from "@/components/ui/button";
 import { CaptureCard } from "./components/pokemon/capture-card";
-import { FloatingCompanion, ThreadCompanion } from "./components/pokemon/companions";
+import { EvolutionSprite, FloatingCompanion, ThreadCompanion } from "./components/pokemon/companions";
 import { CollectionFilterControls, defaultCollectionFilters, filterCaptures } from "./components/pokemon/collection-filters";
 import { CollectionPagination, paginateCaptures } from "./components/pokemon/collection-pagination";
 import { Modal } from "./components/pokemon/modal";
@@ -234,7 +234,9 @@ function CollectionPage() {
             {starter === undefined ? <div className="pokemon-ball size-16" /> : (
               <div className="relative flex size-24 shrink-0 items-center justify-center">
                 <div className="absolute inset-2 rounded-full border border-dashed border-border bg-background/60" />
-                <img src={companion?.spriteUrl ?? starterCapture?.spriteUrl ?? spriteUrl(starter.number)} alt={companion?.pokemonName ?? starter.name} className="relative size-24 object-contain [image-rendering:pixelated]" />
+                {companion === null ? <img src={starterCapture?.spriteUrl ?? spriteUrl(starter.number)} alt={starter.name} className="relative size-24 object-contain [image-rendering:pixelated]" /> : (
+                  <EvolutionSprite captureId={companion.captureId} pokemonName={companion.pokemonName} pokemonNumber={companion.pokemonNumber} spriteUrl={companion.spriteUrl} className="relative size-24" showMessage />
+                )}
               </div>
             )}
             <div>

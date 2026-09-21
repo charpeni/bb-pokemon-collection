@@ -1,10 +1,46 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { experimental_useSidebarThreads, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { Button } from "@/components/ui/button";
 import { starters, type StarterId } from "../../pokemon";
 import { useCollection } from "../../hooks/use-collection";
 import { animatedSpriteUrl, spriteUrl } from "../../lib/pokemon/media";
+
+type EvolutionSpriteProps = {
+	captureId: string;
+	pokemonName: string;
+	pokemonNumber: number;
+	spriteUrl: string;
+	className: string;
+	children?: ReactNode;
+	showMessage?: boolean;
+};
+
+export function EvolutionSprite({ captureId, pokemonName, pokemonNumber, spriteUrl: currentSpriteUrl, className, children, showMessage = false }: EvolutionSpriteProps) {
+	const previous = useRef({ captureId, pokemonName, pokemonNumber, spriteUrl: currentSpriteUrl });
+	const [evolution, setEvolution] = useState<{ fromName: string; fromSpriteUrl: string; key: number } | null>(null);
+
+	useEffect(() => {
+		const prior = previous.current;
+		previous.current = { captureId, pokemonName, pokemonNumber, spriteUrl: currentSpriteUrl };
+		if (prior.captureId !== captureId || prior.pokemonNumber === pokemonNumber) return;
+		setEvolution({ fromName: prior.pokemonName, fromSpriteUrl: prior.spriteUrl, key: pokemonNumber });
+		const timeout = window.setTimeout(() => setEvolution(null), 1_800);
+		return () => window.clearTimeout(timeout);
+	}, [captureId, currentSpriteUrl, pokemonName, pokemonNumber]);
+
+	return (
+		<span className={`pokemon-evolution-stage ${className}`} data-evolving={evolution === null ? undefined : "true"}>
+			{evolution === null ? (children ?? <img src={currentSpriteUrl} alt={pokemonName} className="pokemon-evolution-sprite" draggable={false} />) : (
+				<>
+					<img src={evolution.fromSpriteUrl} alt="" className="pokemon-evolution-sprite pokemon-evolution-from" draggable={false} />
+					<img key={evolution.key} src={currentSpriteUrl} alt={pokemonName} className="pokemon-evolution-sprite pokemon-evolution-to" draggable={false} />
+					{showMessage ? <span className="pokemon-evolution-message" role="status">{evolution.fromName} evolved into {pokemonName}!</span> : null}
+				</>
+			)}
+		</span>
+	);
+}
 
 const spritePatterns: Array<Array<[number, number, number, number]>> = [
 	[[10, 2, 12, 5], [6, 6, 20, 5], [4, 11, 24, 11], [7, 22, 5, 6], [20, 22, 5, 6], [2, 14, 5, 6], [25, 14, 5, 6]],
@@ -57,7 +93,9 @@ export function FloatingCompanion() {
 
 	return createPortal(
 		<div className={`pokemon-floating-companion fixed z-50 cursor-grab select-none ${isDragging ? "cursor-grabbing" : ""} ${isRunning ? "pokemon-bouncing" : ""}`} style={{ left: position.x, top: position.y }} onMouseDown={() => setIsDragging(true)} title={`${companionName} · Lv. ${companion?.level ?? 5}${isRunning ? " - Running with your agent!" : ""}`}>
-			<img src={animated ?? fallback} alt={companionName} className="size-16 object-contain [image-rendering:pixelated] drop-shadow-lg" draggable={false} />
+			{companion === null ? <img src={animated ?? fallback} alt={companionName} className="size-16 object-contain [image-rendering:pixelated] drop-shadow-lg" draggable={false} /> : (
+				<EvolutionSprite captureId={companion.captureId} pokemonName={companionName} pokemonNumber={companion.pokemonNumber} spriteUrl={animated ?? fallback} className="size-16 drop-shadow-lg" showMessage />
+			)}
 		</div>,
 		document.body,
 	);
@@ -76,7 +114,11 @@ export function ThreadCompanion({ threadId, isCompactViewport }: { threadId: str
 
 	return (
 		<Button variant="ghost" size={isCompactViewport ? "icon" : "sm"} className="h-7 gap-1.5 px-1.5" aria-label={`Open Pokemon collection. ${companionName} is level ${companion?.level ?? 5} and ${running ? "running with your agent" : "resting"}.`} onClick={() => navigate.toPluginPanel("collection")}>
-			{companion === null || companion.pokemonNumber === starter.number ? <PixelStarter id={starter.id} running={running} /> : <img src={companion.spriteUrl ?? spriteUrl(companion.pokemonNumber)} alt="" className={`size-7 object-contain [image-rendering:pixelated] ${running ? "pokemon-bouncing" : ""}`} />}
+			{companion === null ? <PixelStarter id={starter.id} running={running} /> : (
+				<EvolutionSprite captureId={companion.captureId} pokemonName={companionName} pokemonNumber={companion.pokemonNumber} spriteUrl={companion.spriteUrl ?? spriteUrl(companion.pokemonNumber)} className={`size-7 ${running ? "pokemon-bouncing" : ""}`}>
+					{companion.pokemonNumber === starter.number ? <PixelStarter id={starter.id} /> : undefined}
+				</EvolutionSprite>
+			)}
 			{isCompactViewport ? null : <span className="max-w-28 truncate text-xs">{companionName} · Lv. {companion?.level ?? 5}</span>}
 		</Button>
 	);

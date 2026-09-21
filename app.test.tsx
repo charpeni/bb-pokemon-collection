@@ -203,6 +203,38 @@ describe("Pokemon collection app", () => {
 		slot.lifecycle.unmount();
 	});
 
+	it("shows an evolution transition when the active companion changes form", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		let currentCollection = collection;
+		const slot = renderSlot(app.navPanels[0]!, { subPath: "" }, {
+			rpc: {
+				collection_get: () => currentCollection,
+				collection_reset: () => currentCollection,
+				demo_reward_add: () => currentCollection,
+				starter_select: () => currentCollection,
+				companion_select: () => currentCollection,
+			},
+		});
+
+		expect(await slot.findByText("Fennekin · Lv. 21")).toBeTruthy();
+		currentCollection = {
+			...collection,
+			companion: {
+				...collection.companion!,
+				pokemonId: "braixen",
+				pokemonName: "Braixen",
+				pokemonNumber: 654,
+				spriteUrl: "https://example.invalid/braixen.png",
+				animatedSpriteUrl: "https://example.invalid/braixen.gif",
+			},
+		};
+		await slot.behavior.emitRealtime("collection-changed", { reason: "companion_evolved" });
+
+		expect((await slot.findByRole("status")).textContent).toBe("Fennekin evolved into Braixen!");
+		expect(slot.container.querySelector('[data-evolving="true"]')).toBeTruthy();
+		slot.lifecycle.unmount();
+	});
+
 	it("paginates filtered Pokedex entries and returns to the first page when filters change", async () => {
 		const template = collection.captures[1]!;
 		const paginatedCollection: Collection = {
