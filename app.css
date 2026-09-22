@@ -288,6 +288,165 @@
   box-shadow: inset 0 0 0 2px var(--card), 0 8px 24px color-mix(in srgb, var(--foreground) 26%, transparent);
 }
 
+.pokemon-hatch-scene {
+  background:
+    radial-gradient(ellipse at 50% 78%, color-mix(in srgb, var(--background) 92%, transparent) 0 14%, transparent 45%),
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, #d9f99d 58%, var(--background)) 0, color-mix(in srgb, #a7f3d0 24%, var(--background)) 42%, var(--background) 78%);
+}
+
+.pokemon-hatch-arena::after {
+  content: "";
+  position: absolute;
+  inset: auto 25% 5.25rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 24%, transparent);
+  filter: blur(4px);
+}
+
+.pokemon-hatch-rays {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 22rem;
+  height: 22rem;
+  translate: -50% -50%;
+  border-radius: 999px;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, #fef08a 32%, transparent) 0 5deg, transparent 5deg 18deg);
+  opacity: 0;
+}
+
+.pokemon-hatching-egg {
+  position: absolute;
+  top: 5rem;
+  width: 7.25rem;
+  height: 9rem;
+  animation: pokemon-hatch-waiting 1.5s ease-in-out infinite;
+}
+
+.pokemon-hatching-egg::before,
+.pokemon-hatching-egg::after,
+.pokemon-hatching-egg span::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  width: 0.22rem;
+  border-radius: 999px;
+  background: #475569;
+  opacity: 0;
+  transform-origin: top;
+}
+
+.pokemon-hatching-egg::before {
+  left: 50%;
+  top: 1.5rem;
+  height: 2.3rem;
+  rotate: 28deg;
+}
+
+.pokemon-hatching-egg::after {
+  left: 55%;
+  top: 3.35rem;
+  height: 1.65rem;
+  rotate: -38deg;
+}
+
+.pokemon-hatching-egg span::before {
+  left: 39%;
+  top: 3.05rem;
+  height: 1.25rem;
+  rotate: 58deg;
+}
+
+.pokemon-hatch-arena[data-phase="cracking"] .pokemon-hatching-egg {
+  animation: pokemon-hatch-cracking 420ms steps(2, end) infinite;
+}
+
+.pokemon-hatch-arena[data-phase="cracking"] .pokemon-hatching-egg::before,
+.pokemon-hatch-arena[data-phase="cracking"] .pokemon-hatching-egg::after,
+.pokemon-hatch-arena[data-phase="cracking"] .pokemon-hatching-egg span::before {
+  opacity: 1;
+  animation: pokemon-hatch-crack-grow 650ms ease-out both;
+}
+
+.pokemon-hatch-flash {
+  position: absolute;
+  top: 1.5rem;
+  width: 18rem;
+  height: 18rem;
+  border-radius: 999px;
+  background: white;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pokemon-hatch-sprite {
+  position: absolute;
+  top: 4rem;
+  width: 13rem;
+  height: 13rem;
+  object-fit: contain;
+  image-rendering: pixelated;
+  opacity: 0;
+}
+
+.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatching-egg {
+  animation: pokemon-hatch-egg-burst 500ms ease-out both;
+}
+
+.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatch-flash {
+  animation: pokemon-hatch-flash 750ms ease-out both;
+}
+
+.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatch-sprite {
+  animation: pokemon-hatch-reveal 850ms cubic-bezier(0.2, 0.9, 0.25, 1.2) 180ms both;
+}
+
+.pokemon-hatch-scene:has(.pokemon-hatch-arena[data-phase="hatched"]) .pokemon-hatch-rays {
+  animation: pokemon-hatch-rays 7s linear 250ms infinite;
+}
+
+@keyframes pokemon-hatch-waiting {
+  0%, 65%, 100% { transform: translateY(0) rotate(0); }
+  72% { transform: translateY(-0.2rem) rotate(-5deg); }
+  82% { transform: translateY(0) rotate(5deg); }
+  90% { transform: translateY(-0.1rem) rotate(-2deg); }
+}
+
+@keyframes pokemon-hatch-cracking {
+  0% { transform: translateX(-0.3rem) rotate(-7deg); }
+  50% { transform: translateY(-0.25rem) rotate(0); }
+  100% { transform: translateX(0.3rem) rotate(7deg); }
+}
+
+@keyframes pokemon-hatch-crack-grow {
+  from { scale: 1 0; }
+  to { scale: 1 1; }
+}
+
+@keyframes pokemon-hatch-egg-burst {
+  0% { opacity: 1; transform: scale(1); filter: brightness(1); }
+  55% { opacity: 1; transform: scale(1.18); filter: brightness(4); }
+  100% { opacity: 0; transform: scale(1.7); filter: brightness(6); }
+}
+
+@keyframes pokemon-hatch-flash {
+  0% { opacity: 0; transform: scale(0.15); }
+  35% { opacity: 1; transform: scale(0.8); }
+  100% { opacity: 0; transform: scale(1.25); }
+}
+
+@keyframes pokemon-hatch-reveal {
+  0% { opacity: 0; transform: translateY(1rem) scale(0.55); filter: brightness(4) saturate(0); }
+  60% { opacity: 1; transform: translateY(-0.35rem) scale(1.12); filter: brightness(1.35) saturate(0.8); }
+  100% { opacity: 1; transform: translateY(0) scale(1); filter: brightness(1) saturate(1) drop-shadow(0 0 18px color-mix(in srgb, #fef08a 65%, transparent)); }
+}
+
+@keyframes pokemon-hatch-rays {
+  from { opacity: 0.75; rotate: 0; }
+  to { opacity: 0.75; rotate: 360deg; }
+}
+
 @keyframes pokemon-classic-evolution-rays {
   to { rotate: 360deg; }
 }
@@ -310,6 +469,11 @@
   .pokemon-evolution-light { animation: none; }
   .pokemon-classic-evolution-from { display: none; }
   .pokemon-classic-evolution-to { animation: none; opacity: 1; filter: none; }
+	.pokemon-hatching-egg { animation: none; }
+	.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatching-egg { display: none; }
+	.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatch-flash,
+	.pokemon-hatch-scene:has(.pokemon-hatch-arena[data-phase="hatched"]) .pokemon-hatch-rays { animation: none; opacity: 0; }
+	.pokemon-hatch-arena[data-phase="hatched"] .pokemon-hatch-sprite { animation: none; opacity: 1; }
 }
 
 @keyframes pokemon-evolution-in {

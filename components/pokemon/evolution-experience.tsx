@@ -4,12 +4,24 @@ import { Button } from "@/components/ui/button";
 import type { rpcContract } from "../../server";
 
 type Evolution = {
+	type: "evolution";
 	fromName: string;
 	fromSpriteUrl: string;
 	toName: string;
 	toSpriteUrl: string;
 	key: string;
 };
+
+type Hatch = {
+	type: "hatch";
+	pokemonName: string;
+	pokemonNumber: number;
+	spriteUrl: string;
+	isShiny: boolean;
+	key: string;
+};
+
+type Experience = Evolution | Hatch;
 
 function readEvolutions(payload: unknown): Evolution[] {
 	if (typeof payload !== "object" || payload === null) return [];
@@ -20,11 +32,31 @@ function readEvolutions(payload: unknown): Evolution[] {
 		const evolution = entry as Record<string, unknown>;
 		if (typeof evolution.fromName !== "string" || typeof evolution.fromSpriteUrl !== "string" || typeof evolution.toName !== "string" || typeof evolution.toSpriteUrl !== "string" || typeof evolution.toNumber !== "number") return [];
 		return [{
+			type: "evolution" as const,
 			fromName: evolution.fromName,
 			fromSpriteUrl: evolution.fromSpriteUrl,
 			toName: evolution.toName,
 			toSpriteUrl: evolution.toSpriteUrl,
 			key: `${candidate.captureId}:${evolution.toNumber}:${index}`,
+		}];
+	});
+}
+
+function readHatches(payload: unknown): Hatch[] {
+	if (typeof payload !== "object" || payload === null) return [];
+	const candidate = payload as { reason?: unknown; hatches?: unknown };
+	if (candidate.reason !== "egg_hatched" || !Array.isArray(candidate.hatches)) return [];
+	return candidate.hatches.flatMap((entry) => {
+		if (typeof entry !== "object" || entry === null) return [];
+		const hatch = entry as Record<string, unknown>;
+		if (typeof hatch.captureId !== "string" || typeof hatch.pokemonName !== "string" || typeof hatch.pokemonNumber !== "number" || typeof hatch.spriteUrl !== "string" || typeof hatch.isShiny !== "boolean") return [];
+		return [{
+			type: "hatch" as const,
+			pokemonName: hatch.pokemonName,
+			pokemonNumber: hatch.pokemonNumber,
+			spriteUrl: hatch.spriteUrl,
+			isShiny: hatch.isShiny,
+			key: hatch.captureId,
 		}];
 	});
 }
@@ -110,10 +142,56 @@ function EvolutionModal({ evolution, onClose }: { evolution: Evolution; onClose:
 	);
 }
 
+function HatchModal({ hatch, onClose }: { hatch: Hatch; onClose: () => void }) {
+	const [phase, setPhase] = useState<"waiting" | "cracking" | "hatched">("waiting");
+
+	useEffect(() => {
+		const crack = window.setTimeout(() => setPhase("cracking"), 1_500);
+		const reveal = window.setTimeout(() => setPhase("hatched"), 4_000);
+		const dismissal = window.setTimeout(onClose, 8_000);
+		return () => {
+			window.clearTimeout(crack);
+			window.clearTimeout(reveal);
+			window.clearTimeout(dismissal);
+		};
+	}, [hatch.key, onClose]);
+
+	useEffect(() => {
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape") onClose();
+		};
+		document.addEventListener("keydown", closeOnEscape);
+		return () => document.removeEventListener("keydown", closeOnEscape);
+	}, [onClose]);
+
+	const hatched = phase === "hatched";
+	return (
+		<div className="pokemon-hatch-modal fixed inset-0 z-[110] grid place-items-center bg-black/70 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+			<section className="pokemon-hatch-scene relative w-full max-w-2xl overflow-hidden rounded-xl border border-border shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="pokemon-hatch-title">
+				<Button className="absolute right-3 top-3 z-20 border-white/30 bg-black/25 text-white hover:bg-black/45 hover:text-white" variant="outline" size="icon" aria-label="Close egg hatching" onClick={onClose}>
+					<svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+				</Button>
+				<div className="pokemon-hatch-rays" aria-hidden="true" />
+				<div className="pokemon-hatch-arena relative flex min-h-[22rem] items-center justify-center px-8 pb-28 pt-12" data-phase={phase}>
+					<div className="pokemon-hatching-egg pokemon-egg" aria-hidden="true"><span /></div>
+					<div className="pokemon-hatch-flash" aria-hidden="true" />
+					<img src={hatch.spriteUrl} alt={hatched ? hatch.pokemonName : ""} className="pokemon-hatch-sprite" draggable={false} />
+				</div>
+				<div className="pokemon-evolution-dialog absolute inset-x-3 bottom-3 z-10 rounded-lg border-4 border-double border-foreground bg-card p-4 pr-24 shadow-xl sm:inset-x-5 sm:bottom-5">
+					<p id="pokemon-hatch-title" className="font-mono text-base font-semibold leading-7 text-foreground sm:text-lg">
+						{hatched ? <>{hatch.isShiny ? "A Shiny " : ""}{hatch.pokemonName} hatched from the Egg!</> : phase === "cracking" ? <>The Egg is cracking!</> : <>Oh?</>}
+					</p>
+					<Button className="absolute bottom-3 right-3" variant="outline" size="sm" onClick={onClose}>{hatched ? "Continue" : "Skip"}</Button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
 export function EvolutionExperience() {
 	const rpc = useRpc<typeof rpcContract>();
 	const [enabled, setEnabled] = useState<boolean | null>(null);
-	const [evolutions, setEvolutions] = useState<Evolution[]>([]);
+	const [experiences, setExperiences] = useState<Experience[]>([]);
 
 	const loadPreference = useCallback(() => {
 		rpc.call("preferences_get").then(({ showEvolutionAnimations }) => setEnabled(showEvolutionAnimations), () => setEnabled(false));
@@ -122,14 +200,16 @@ export function EvolutionExperience() {
 	useEffect(loadPreference, [loadPreference]);
 	useRealtime("preferences-changed", loadPreference);
 	useRealtime("collection-changed", (payload) => {
-		const next = readEvolutions(payload);
-		if (next.length > 0) setEvolutions((current) => [...current, ...next]);
+		const next = [...readEvolutions(payload), ...readHatches(payload)];
+		if (next.length > 0) setExperiences((current) => [...current, ...next]);
 	});
 
 	useEffect(() => {
-		if (enabled === false) setEvolutions([]);
+		if (enabled === false) setExperiences([]);
 	}, [enabled]);
 
-	if (enabled !== true || evolutions[0] === undefined) return null;
-	return <EvolutionModal evolution={evolutions[0]} onClose={() => setEvolutions((current) => current.slice(1))} />;
+	const current = experiences[0];
+	if (enabled !== true || current === undefined) return null;
+	const onClose = () => setExperiences((queued) => queued.slice(1));
+	return current.type === "evolution" ? <EvolutionModal evolution={current} onClose={onClose} /> : <HatchModal hatch={current} onClose={onClose} />;
 }

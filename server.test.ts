@@ -121,6 +121,16 @@ describe("Pokemon Catcher server", () => {
 			reason: "companion_evolved",
 			evolutions: [{ fromName: "Fennekin", toName: "Braixen", toNumber: 654 }],
 		});
+		expect(harness.inspection.realtimeSignals.findLast((signal) => signal.channel === "collection-changed" && (signal.payload as { reason?: string }).reason === "egg_hatched")?.payload).toMatchObject({
+			reason: "egg_hatched",
+			hatches: [{
+				captureId: expect.any(String),
+				pokemonName: expect.any(String),
+				pokemonNumber: expect.any(Number),
+				spriteUrl: expect.any(String),
+				isShiny: false,
+			}],
+		});
 		const { harness: reloadedHarness } = await harness.lifecycle.reload(plugin);
 		const afterReload = await reloadedHarness.behavior.callRpc("collection_get", null) as { captures: Array<{ pokemonId: string; isEgg: boolean; eggStepsRequired: number }> };
 		expect(afterReload.captures.find((capture) => capture.pokemonId === "braixen")).toMatchObject({ isEgg: false, eggStepsRequired: 0 });

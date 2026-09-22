@@ -125,11 +125,11 @@ function SettingsPage() {
         {error === null ? null : <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
         <section className="rounded-xl border border-border bg-card p-5">
-          <h3 className="font-semibold">Evolution experience</h3>
-          <p className="mt-1 text-sm text-muted-foreground">Choose whether companion evolutions interrupt the screen with the classic animation and chime.</p>
+          <h3 className="font-semibold">Pokemon experiences</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Choose whether evolutions and Egg hatches interrupt the screen with classic animations.</p>
           <label className="mt-4 flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border bg-muted/30 p-3">
-            <span><strong className="block text-sm">Show evolution animations</strong><span className="mt-0.5 block text-xs text-muted-foreground">You can still skip any animation with Escape, the close button, or Skip.</span></span>
-            <input aria-label="Show evolution animations" type="checkbox" className="size-4 accent-primary" checked={showEvolutionAnimations} onChange={(event) => setShowEvolutionAnimations(event.target.checked)} />
+            <span><strong className="block text-sm">Show evolution and hatching animations</strong><span className="mt-0.5 block text-xs text-muted-foreground">You can still skip any animation with Escape, the close button, or Skip.</span></span>
+            <input aria-label="Show evolution and hatching animations" type="checkbox" className="size-4 accent-primary" checked={showEvolutionAnimations} onChange={(event) => setShowEvolutionAnimations(event.target.checked)} />
           </label>
         </section>
 

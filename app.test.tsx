@@ -282,6 +282,34 @@ describe("Pokemon collection app", () => {
 		disabledSlot.lifecycle.unmount();
 	});
 
+	it("shows a skippable Egg hatching experience", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		const overlay = app.appOverlays.find(({ id }) => id === "evolution-experience")!;
+		const slot = renderSlot(overlay, {}, {
+			rpc: {
+				preferences_get: () => ({ showEvolutionAnimations: true }),
+			},
+		});
+
+		await slot.behavior.emitRealtime("collection-changed", {
+			reason: "egg_hatched",
+			hatches: [{
+				captureId: "egg-1",
+				pokemonName: "Dratini",
+				pokemonNumber: 147,
+				spriteUrl: "https://example.invalid/dratini.png",
+				isShiny: false,
+			}],
+		});
+
+		const dialog = await slot.findByRole("dialog");
+		expect(dialog.textContent).toContain("Oh?");
+		expect(slot.container.querySelector('[data-phase="waiting"] .pokemon-hatching-egg')).toBeTruthy();
+		fireEvent.click(slot.getByRole("button", { name: "Skip" }));
+		await vi.waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
+		slot.lifecycle.unmount();
+	});
+
 	it("paginates filtered Pokedex entries and returns to the first page when filters change", async () => {
 		const template = collection.captures[1]!;
 		const paginatedCollection: Collection = {
@@ -349,7 +377,7 @@ describe("Pokemon collection app", () => {
 		expect(slot.getByRole("button", { name: "Disconnect GitHub" })).toBeTruthy();
 		fireEvent.click(slot.getByText("1 repository selected"));
 		fireEvent.click(slot.getByRole("checkbox", { name: /acme\/secret-lab/i }));
-		fireEvent.click(slot.getByRole("checkbox", { name: "Show evolution animations" }));
+		fireEvent.click(slot.getByRole("checkbox", { name: "Show evolution and hatching animations" }));
 		fireEvent.click(slot.getByRole("button", { name: /Jira/ }));
 		fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
 		await vi.waitFor(() => expect(updates).toEqual([{

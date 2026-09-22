@@ -648,16 +648,30 @@ export default async function plugin(bb: BbPluginApi) {
 			const availableTokens = incubator.token_remainder + delta;
 			const eggSteps = Math.floor(availableTokens / TOKENS_PER_EGG_STEP);
 			db.prepare("UPDATE incubator_state SET token_remainder = ? WHERE id = 1").run(availableTokens % TOKENS_PER_EGG_STEP);
+			const hatchedCaptureIds = eggSteps === 0 ? [] : (db.prepare(`
+				SELECT id FROM captures
+				WHERE egg_steps_required > 0 AND hatched_at IS NULL AND egg_steps + ? >= egg_steps_required
+			`).all(eggSteps) as Array<{ id: string }>).map(({ id }) => id);
 			if (eggSteps > 0) {
 				db.prepare(`UPDATE captures
 					SET egg_steps = MIN(egg_steps_required, egg_steps + ?),
 						hatched_at = CASE WHEN egg_steps + ? >= egg_steps_required THEN COALESCE(hatched_at, ?) ELSE hatched_at END
 					WHERE egg_steps_required > 0 AND hatched_at IS NULL`).run(eggSteps, eggSteps, new Date().toISOString());
 			}
-			return { addedTokens: delta, eggSteps };
+			return { addedTokens: delta, eggSteps, hatchedCaptureIds };
 		})();
 		if (progress.addedTokens > 0) await recordReachedEvolutions(db, bb, activeCaptureId);
-		if (progress.addedTokens > 0) bb.realtime.publish(COLLECTION_CHANGED, progress);
+		if (progress.addedTokens > 0) {
+			const hatchedIds = new Set(progress.hatchedCaptureIds);
+			const hatches = readCaptures(db).filter(({ id }) => hatchedIds.has(id)).map((capture) => ({
+				captureId: capture.id,
+				pokemonName: capture.pokemonName,
+				pokemonNumber: capture.pokemonNumber,
+				spriteUrl: capture.isShiny ? capture.shinySpriteUrl : capture.spriteUrl,
+				isShiny: capture.isShiny,
+			}));
+			bb.realtime.publish(COLLECTION_CHANGED, hatches.length === 0 ? progress : { ...progress, reason: "egg_hatched", hatches });
+		}
 	});
 
 	bb.agents.registerTool({
