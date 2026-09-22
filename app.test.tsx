@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent } from "@testing-library/react";
+import { act, cleanup, fireEvent } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Collection, PokemonSettings } from "./server";
 
 afterEach(() => {
 	cleanup();
+	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
@@ -308,6 +309,84 @@ describe("Pokemon collection app", () => {
 		fireEvent.click(slot.getByRole("button", { name: "Skip" }));
 		await vi.waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
 		slot.lifecycle.unmount();
+	});
+
+	it("uses a shorter opacity-only timeline when reduced motion is requested", async () => {
+		vi.stubGlobal("matchMedia", vi.fn((media: string) => ({
+			matches: media === "(prefers-reduced-motion: reduce)",
+			media,
+			onchange: null,
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		})));
+		const app = await loadPluginApp(() => import("./app"));
+		const overlay = app.appOverlays.find(({ id }) => id === "evolution-experience")!;
+		let preferenceReads = 0;
+		const slot = renderSlot(overlay, {}, {
+			rpc: {
+				preferences_get: () => { preferenceReads += 1; return { showEvolutionAnimations: true }; },
+			},
+		});
+		await vi.waitFor(() => expect(preferenceReads).toBe(1));
+		vi.useFakeTimers();
+
+		await slot.behavior.emitRealtime("collection-changed", {
+			reason: "egg_hatched",
+			hatches: [{
+				captureId: "egg-reduced",
+				pokemonName: "Dratini",
+				pokemonNumber: 147,
+				spriteUrl: "https://example.invalid/dratini.png",
+				isShiny: false,
+			}],
+		});
+		expect(slot.getByText("Oh?")).toBeTruthy();
+		act(() => vi.advanceTimersByTime(400));
+		expect(slot.getByText("The Egg is cracking!")).toBeTruthy();
+		act(() => vi.advanceTimersByTime(500));
+		expect(slot.getByText("Dratini hatched from the Egg!")).toBeTruthy();
+		fireEvent.click(slot.getByRole("button", { name: "Continue" }));
+		expect(slot.getByRole("dialog")).toBeTruthy();
+		act(() => vi.advanceTimersByTime(160));
+		expect(slot.queryByRole("dialog")).toBeNull();
+		slot.lifecycle.unmount();
+	});
+
+	it("previews evolution and Egg-hatch animations from developer tools without changing the collection", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		const overlay = app.appOverlays.find(({ id }) => id === "evolution-experience")!;
+		const overlaySlot = renderSlot(overlay, {}, {
+			rpc: {
+				preferences_get: () => ({ showEvolutionAnimations: false }),
+			},
+		});
+		const collectionSlot = renderSlot(app.navPanels[0]!, { subPath: "" }, {
+			rpc: {
+				collection_get: () => collection,
+				collection_reset: () => collection,
+				demo_reward_add: () => collection,
+				starter_select: () => collection,
+				companion_select: () => collection,
+			},
+		});
+
+		expect(await collectionSlot.findByText("Fennekin · Lv. 21")).toBeTruthy();
+		fireEvent.click(collectionSlot.getByRole("button", { name: "Developer tools" }));
+		fireEvent.click(collectionSlot.getByRole("button", { name: "Preview evolution" }));
+		expect((await overlaySlot.findByRole("dialog")).textContent).toContain("Fennekin is evolving!");
+		fireEvent.click(overlaySlot.getByRole("button", { name: "Skip" }));
+		await vi.waitFor(() => expect(overlaySlot.queryByRole("dialog")).toBeNull());
+
+		fireEvent.click(collectionSlot.getByRole("button", { name: "Developer tools" }));
+		fireEvent.click(collectionSlot.getByRole("button", { name: "Preview Egg hatch" }));
+		expect((await overlaySlot.findByRole("dialog")).textContent).toContain("Oh?");
+		expect(overlaySlot.container.querySelector('[data-phase="waiting"] .pokemon-hatching-egg')).toBeTruthy();
+
+		overlaySlot.lifecycle.unmount();
+		collectionSlot.lifecycle.unmount();
 	});
 
 	it("paginates filtered Pokedex entries and returns to the first page when filters change", async () => {

@@ -9,7 +9,7 @@ import { starters } from "./pokemon";
 import { Button } from "@/components/ui/button";
 import { CaptureCard } from "./components/pokemon/capture-card";
 import { EvolutionSprite, FloatingCompanion, ThreadCompanion } from "./components/pokemon/companions";
-import { EvolutionExperience } from "./components/pokemon/evolution-experience";
+import { EvolutionExperience, previewPokemonExperience } from "./components/pokemon/evolution-experience";
 import { CollectionFilterControls, defaultCollectionFilters, filterCaptures } from "./components/pokemon/collection-filters";
 import { CollectionPagination, paginateCaptures } from "./components/pokemon/collection-pagination";
 import { Modal } from "./components/pokemon/modal";
@@ -370,6 +370,18 @@ function CollectionPage() {
             </div>
             {collection.starter === null ? <p className="text-sm text-destructive">Choose a starter before adding demo rewards.</p> : null}
             {lastDemoAdded === null ? null : <p className="text-sm text-muted-foreground">Added a demo {lastDemoAdded === "egg" ? "Egg to the Incubator" : "shiny Ponyta to the Pokédex"}.</p>}
+            <div className="mt-5 border-t border-border pt-5">
+              <h3 className="font-semibold text-foreground">Animation previews</h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">Play a sample experience without changing collection progress.</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <Button variant="outline" onClick={() => { setDeveloperOpen(false); previewPokemonExperience("evolution"); }}>
+                  Preview evolution
+                </Button>
+                <Button variant="outline" onClick={() => { setDeveloperOpen(false); previewPokemonExperience("hatch"); }}>
+                  Preview Egg hatch
+                </Button>
+              </div>
+            </div>
             <div className="mt-6 flex justify-end">
               <Button variant="outline" onClick={() => setDeveloperOpen(false)}>Done</Button>
             </div>

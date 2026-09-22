@@ -18,10 +18,11 @@ companion and keeps its own experience when swapped out. Level evolutions use
 the usual level threshold; item evolutions unlock at 500,000 tokens, other
 special evolutions at 750,000 tokens, and trade evolutions at 1,000,000 tokens.
 Every evolved form is also recorded as its own Pokédex catch. Developer tools
-in the collection panel can add a demo Egg or shiny Pokémon and reset local
-collection progress. Companion evolutions open a skippable, game-inspired
-animation with an original synthesized chime. The animation can be disabled in
-Pokemon Collection settings.
+in the collection panel can add a demo Egg or shiny Pokémon, preview evolution
+and Egg-hatch animations without changing progress, and reset the local
+collection. Companion evolutions open a skippable, game-inspired animation
+with an original synthesized chime. The animation can be disabled in Pokemon
+Collection settings.
 
 ## Automatic Git detection
 
