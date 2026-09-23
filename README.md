@@ -40,6 +40,18 @@ The GitHub event feed exposes at most the latest 100 events. If the saved cursor
 
 Local branch and worktree scanning remains limited to repositories known to BB. Remote activity is limited to the GitHub repositories explicitly selected in settings.
 
+## Third-party services and rights
+
+Pokemon Catcher is an unofficial fan project and is not affiliated with,
+endorsed by, or sponsored by Nintendo, Game Freak, Creatures Inc., The Pokemon
+Company, PokéAPI, Pokémon Showdown, Smogon, or Veekun.
+
+The plugin requests data from [PokéAPI](https://pokeapi.co/) and loads sprites
+and cries from the PokéAPI GitHub repositories at runtime. Pokémon names,
+characters, images, audio, and related trademarks remain the property of their
+respective rights holders. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)
+for source and licensing details.
+
 ## Commands
 
 ```sh
