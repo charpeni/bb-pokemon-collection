@@ -64,17 +64,59 @@ function hasRunningThread(threads: ReturnType<typeof experimental_useSidebarThre
 	return threads.some((thread) => thread.indicator === "runtime" || Object.values(thread.activity).some((count) => count > 0));
 }
 
+type Position = { x: number; y: number };
+
+const POSITION_STORAGE_KEY = "pokemon-catcher:floating-companion-position";
+const FLOATING_COMPANION_SIZE = 64;
+
+function isPosition(value: unknown): value is Position {
+	if (typeof value !== "object" || value === null) return false;
+	const { x, y } = value as Record<string, unknown>;
+	return typeof x === "number" && Number.isFinite(x) && typeof y === "number" && Number.isFinite(y);
+}
+
+/** The last dropped position, kept inside the current window; the bottom-left corner when none is saved. */
+function readSavedPosition(): Position {
+	try {
+		const saved: unknown = JSON.parse(window.localStorage.getItem(POSITION_STORAGE_KEY) ?? "null");
+		if (isPosition(saved)) {
+			return {
+				x: Math.min(Math.max(saved.x, 0), Math.max(window.innerWidth - FLOATING_COMPANION_SIZE, 0)),
+				y: Math.min(Math.max(saved.y, 0), Math.max(window.innerHeight - FLOATING_COMPANION_SIZE, 0)),
+			};
+		}
+	} catch {
+		// Unreadable storage falls back to the default corner.
+	}
+	return { x: 32, y: window.innerHeight - 120 };
+}
+
+function savePosition(position: Position) {
+	try {
+		window.localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position));
+	} catch {
+		// The companion still moves for this session when storage is unavailable.
+	}
+}
+
 export function FloatingCompanion() {
 	const { collection } = useCollection();
 	const { threads } = experimental_useSidebarThreads();
-	const [position, setPosition] = useState({ x: 32, y: window.innerHeight - 120 });
+	const [position, setPosition] = useState(readSavedPosition);
 	const [isDragging, setIsDragging] = useState(false);
 	const isRunning = hasRunningThread(threads);
 
 	useEffect(() => {
 		if (!isDragging) return;
-		const handleMove = (event: MouseEvent) => setPosition({ x: event.clientX - 32, y: event.clientY - 32 });
-		const handleUp = () => setIsDragging(false);
+		let dropped: Position | null = null;
+		const handleMove = (event: MouseEvent) => {
+			dropped = { x: event.clientX - 32, y: event.clientY - 32 };
+			setPosition(dropped);
+		};
+		const handleUp = () => {
+			setIsDragging(false);
+			if (dropped !== null) savePosition(dropped);
+		};
 		window.addEventListener("mousemove", handleMove);
 		window.addEventListener("mouseup", handleUp);
 		return () => {

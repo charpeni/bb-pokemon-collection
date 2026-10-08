@@ -8,6 +8,7 @@ afterEach(() => {
 	cleanup();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
+	window.localStorage.clear();
 });
 
 const collection: Collection = {
@@ -235,6 +236,48 @@ describe("Pokemon collection app", () => {
 		expect((await slot.findByRole("status")).textContent).toBe("Fennekin evolved into Braixen!");
 		expect(slot.container.querySelector('[data-evolving="true"]')).toBeTruthy();
 		slot.lifecycle.unmount();
+	});
+
+	it("remembers where the floating companion was dropped across reloads", async () => {
+		const app = await loadPluginApp(() => import("./app"));
+		const overlay = app.appOverlays.find(({ id }) => id === "floating-companion")!;
+		const options = { rpc: { collection_get: () => collection } };
+		const storageKey = "pokemon-catcher:floating-companion-position";
+		const defaultPlacement = { left: "32px", top: `${window.innerHeight - 120}px` };
+		const floatingCompanion = () => vi.waitFor(() => {
+			const element = document.body.querySelector<HTMLElement>(".pokemon-floating-companion");
+			expect(element).toBeTruthy();
+			return element!;
+		});
+		const placement = async () => {
+			const { style } = await floatingCompanion();
+			return { left: style.left, top: style.top };
+		};
+
+		const first = renderSlot(overlay, {}, options);
+		expect(await placement()).toEqual(defaultPlacement);
+		fireEvent.mouseDown(await floatingCompanion());
+		fireEvent.mouseUp(window);
+		expect(window.localStorage.getItem(storageKey)).toBeNull();
+		fireEvent.mouseDown(await floatingCompanion());
+		fireEvent.mouseMove(window, { clientX: 500, clientY: 300 });
+		fireEvent.mouseUp(window);
+		expect(await placement()).toEqual({ left: "468px", top: "268px" });
+		first.lifecycle.unmount();
+
+		const reloaded = renderSlot(overlay, {}, options);
+		expect(await placement()).toEqual({ left: "468px", top: "268px" });
+		reloaded.lifecycle.unmount();
+
+		window.localStorage.setItem(storageKey, JSON.stringify({ x: 5_000, y: -40 }));
+		const smallerWindow = renderSlot(overlay, {}, options);
+		expect(await placement()).toEqual({ left: `${window.innerWidth - 64}px`, top: "0px" });
+		smallerWindow.lifecycle.unmount();
+
+		window.localStorage.setItem(storageKey, "not json");
+		const corrupted = renderSlot(overlay, {}, options);
+		expect(await placement()).toEqual(defaultPlacement);
+		corrupted.lifecycle.unmount();
 	});
 
 	it("shows a skippable classic evolution experience and honors the saved preference", async () => {
